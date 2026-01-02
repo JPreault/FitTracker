@@ -1,3 +1,5 @@
+"use client";
+
 import { Apple, CircleUser, Flame, Footprints, GlassWater, SquareActivity } from "lucide-react";
 
 import {
@@ -11,8 +13,9 @@ import {
     SidebarMenuButton,
     SidebarMenuItem,
 } from "@/components/ui/sidebar";
-import Link from "next/link";
 import { cn } from "@/lib/utils";
+import Link from "next/link";
+import { usePathname } from "next/navigation";
 
 const data = {
     navMain: [
@@ -47,6 +50,7 @@ const data = {
 };
 
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
+    const pathname = usePathname();
     return (
         <Sidebar collapsible="offcanvas" className="border-r-2 border-primary/10 bg-background/95 backdrop-blur-sm" {...props}>
             <SidebarHeader className="p-4 pb-2">
@@ -77,22 +81,36 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                 <SidebarGroup>
                     <SidebarGroupContent>
                         <SidebarMenu className="gap-2">
-                            {data.navMain.map((item) => (
-                                <SidebarMenuItem key={item.title}>
-                                    <SidebarMenuButton
-                                        asChild
-                                        tooltip={item.title}
-                                        className="h-12 rounded-xl transition-all duration-200 hover:bg-primary/10 hover:text-primary group/item"
-                                    >
-                                        <Link href={item.url} className={cn("flex gap-4 items-center px-4", item.disabled && "opacity-50 pointer-events-none")} >
-                                            {item.icon && (
-                                                <item.icon className="size-5 text-muted-foreground group-hover/item:text-primary transition-colors" />
+                            {data.navMain.map((item) => {
+                                const isActive = pathname === item.url;
+                                return (
+                                    <SidebarMenuItem key={item.title}>
+                                        <SidebarMenuButton
+                                            asChild
+                                            tooltip={item.title}
+                                            className={cn(
+                                                "h-12 rounded-xl transition-all duration-200 hover:bg-primary/10 hover:text-primary group/item",
+                                                isActive && "bg-primary/10 text-primary font-bold shadow-sm"
                                             )}
-                                            <span className="text-base font-medium">{item.title}</span>
-                                        </Link>
-                                    </SidebarMenuButton>
-                                </SidebarMenuItem>
-                            ))}
+                                        >
+                                            <Link
+                                                href={item.url}
+                                                className={cn("flex gap-4 items-center px-4", item.disabled && "opacity-50 pointer-events-none")}
+                                            >
+                                                {item.icon && (
+                                                    <item.icon
+                                                        className={cn(
+                                                            "size-5 text-muted-foreground transition-colors",
+                                                            isActive ? "text-primary" : "group-hover/item:text-primary"
+                                                        )}
+                                                    />
+                                                )}
+                                                <span className="text-base font-medium">{item.title}</span>
+                                            </Link>
+                                        </SidebarMenuButton>
+                                    </SidebarMenuItem>
+                                );
+                            })}
                         </SidebarMenu>
                     </SidebarGroupContent>
                 </SidebarGroup>
