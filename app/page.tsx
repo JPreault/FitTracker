@@ -1,5 +1,5 @@
 import { cn } from "@/lib/utils";
-import { Apple, Flame, Footprints, GlassWater, SquareActivity } from "lucide-react";
+import { Apple, CircleGauge, Flame, Footprints, GlassWater, HeartPulse, SquareActivity } from "lucide-react";
 import Link from "next/link";
 
 const apps = [
@@ -38,6 +38,20 @@ const apps = [
         icon: GlassWater,
         disabled: false,
     },
+    {
+        title: "Allure",
+        description: "Calculez votre allure optimale pour atteindre votre objectif.",
+        url: "/allure",
+        icon: CircleGauge,
+        disabled: false,
+    },
+    {
+        title: "Cardio",
+        description: "Calculez vos zones d'intensité cardiaque pour optimiser votre entraînement.",
+        url: "/cardio",
+        icon: HeartPulse,
+        disabled: false,
+    },
 ];
 
 export default function Home() {
@@ -45,8 +59,10 @@ export default function Home() {
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-3 md:grid-cols-3 sm:grid-cols-2 xl:grid-cols-4 w-full p-7">
             {apps.map((app, index) => (
                 <Link key={index} href={app.url} className={cn("bg-secondary p-4 border rounded", app.disabled && "opacity-50 pointer-events-none")}>
-                    <app.icon className="text-neutral-400 dark:text-neutral-600 n-icon" />
-                    <span className="truncat my-5px text-lg text-black dark:text-white">{app.title}</span>
+                    <div className="flex gap-2 items-center">
+                        <app.icon className="text-neutral-400 dark:text-neutral-600 n-icon" />
+                        <span className="truncat my-5px text-lg text-black dark:text-white">{app.title}</span>
+                    </div>
                     {app.description && <div className="line-clamp-2 text-neutral-500 dark:text-neutral-400">{app.description}</div>}
                 </Link>
             ))}
