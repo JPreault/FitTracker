@@ -94,7 +94,7 @@ export default function RootLayout({
                                 <ModeToggle />
                             </div>
                             {children}
-                            <Toaster />
+                            <Toaster richColors />
                         </main>
                     </SidebarProvider>
                 </ThemeProvider>
