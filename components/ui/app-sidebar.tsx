@@ -177,7 +177,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                 <div className="text-xs text-center">Fit Tracker v1.0.0</div>
                 <div className="text-xs text-center">
                     © {new Date().getFullYear()}{" "}
-                    <Link className="text-primary hover:underline" href="https://www.alexandre-artisien.fr">
+                    <Link className="text-primary hover:underline" target="_blank" rel="noopener noreferrer nofollow" href="https://www.alexandre-artisien.fr">
                         Alexanndre Artisien
                     </Link>
                 </div>
