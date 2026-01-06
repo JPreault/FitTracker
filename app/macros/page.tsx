@@ -8,16 +8,22 @@ import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Slider } from "@/components/ui/slider";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { calculateBMR, calculateTDEE } from "@/lib/calculators/calories";
 import { useUserStore } from "@/stores/user-store";
 import { AlertTriangle, Droplet, Fish, Info, Utensils, Wheat } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
 
 export default function MacrosPage() {
-    const { weight } = useUserStore();
+    const { height, weight, age, gender, activityLevel } = useUserStore();
 
     // Global Inputs
-    const [targetCaloriesStr, setTargetCaloriesStr] = useState<string>("2000");
+    const [manualCalories, setManualCalories] = useState<string | null>(null);
+
+    // Initial logic: derive TDEE from store
+    const bmr = calculateBMR(weight!, height!, age!, gender!);
+    const tdee = bmr && activityLevel ? calculateTDEE(bmr, activityLevel!) : null;
+    const targetCaloriesStr = manualCalories ?? (tdee?.toString() || "2000");
 
     // Mode: Ratio (%)
     const [proteinPct, setProteinPct] = useState<number>(30);
@@ -126,7 +132,7 @@ export default function MacrosPage() {
                         <CardContent>
                             <div className="space-y-2">
                                 <Label htmlFor="calories">Cible Calorique (kcal/j)</Label>
-                                <Input id="calories" type="number" value={targetCaloriesStr} onChange={(e) => setTargetCaloriesStr(e.target.value)} />
+                                <Input id="calories" type="number" value={targetCaloriesStr} onChange={(e) => setManualCalories(e.target.value)} />
                                 <p className="text-xs text-muted-foreground">
                                     Utilisez le{" "}
                                     <Link href="/calories" className="underline hover:text-primary">

@@ -35,6 +35,7 @@ export const metadata: Metadata = {
             name: "Alexandre Artisien",
         },
     ],
+    themeColor: "#34D399",
     generator: "Next.js",
     creator: "Alexandre Artisien",
     publisher: "Alexandre Artisien",

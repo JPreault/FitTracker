@@ -4,17 +4,10 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
+import { ACTIVITY_FACTORS, calculateBMR, calculateTDEE, deficitCalories, surplusCalories } from "@/lib/calculators/calories";
 import { useUserStore } from "@/stores/user-store";
 import { AlertTriangle, ArrowRight, Flame, Info, TrendingDown, TrendingUp } from "lucide-react";
 import Link from "next/link";
-
-const ACTIVITY_FACTORS = {
-    sedentary: 1.2,
-    light: 1.375,
-    moderate: 1.55,
-    active: 1.725,
-    very_active: 1.9,
-};
 
 const ACTIVITY_LABELS = {
     sedentary: "Sédentaire",
@@ -28,33 +21,16 @@ export default function CaloriesPage() {
     const { height, weight, age, gender, activityLevel } = useUserStore();
 
     // --- LOGIC ---
-
-    const calculateBMR = () => {
-        if (!weight || !height || !age || gender === "unspecified") return null;
-
-        // Mifflin-St Jeor Equation
-        let bmr = 10 * weight + 6.25 * height - 5 * age;
-
-        if (gender === "male") {
-            bmr += 5;
-        } else {
-            bmr -= 161;
-        }
-
-        return bmr;
-    };
-
-    const bmr = calculateBMR();
+    const bmr = calculateBMR(weight!, height!, age!, gender!);
     let tdee: number | null = null;
     let warning: string | null = null;
 
     if (bmr && activityLevel) {
-        const factor = ACTIVITY_FACTORS[activityLevel];
-        tdee = Math.round(bmr * factor);
+        tdee = calculateTDEE(bmr, activityLevel)  ;
 
-        if (tdee < 1200) {
+        if (tdee && tdee < 1200) {
             warning = "Attention : Ce résultat est très bas (< 1200 kcal). Consultez un professionnel.";
-        } else if (tdee > 5000) {
+        } else if (tdee && tdee > 5000) {
             warning = "Attention : Ce résultat est très élevé (> 5000 kcal). Vérifiez vos données.";
         }
     }
@@ -68,8 +44,8 @@ export default function CaloriesPage() {
     const hasMissingData = missingFields.length > 0;
 
     // Goals (Light Deficit / Surplus = +/- 10%)
-    const deficitCalories = tdee ? Math.round(tdee * 0.9) : null;
-    const surplusCalories = tdee ? Math.round(tdee * 1.1) : null;
+    const calculateDeficitCalories = tdee ? deficitCalories(tdee) : null;
+    const calculateSurplusCalories = tdee ? surplusCalories(tdee) : null;
 
     return (
         <div className="w-full max-w-4xl mx-auto p-4 md:p-8 space-y-8 animate-in fade-in duration-500">
@@ -133,7 +109,7 @@ export default function CaloriesPage() {
                             </CardHeader>
                             <CardContent>
                                 <div className="text-3xl font-bold tracking-tighter">
-                                    {deficitCalories?.toLocaleString("fr-FR")}{" "}
+                                    {calculateDeficitCalories?.toLocaleString("fr-FR")}{" "}
                                     <span className="text-base font-normal text-muted-foreground">kcal/j</span>
                                 </div>
                             </CardContent>
@@ -150,7 +126,7 @@ export default function CaloriesPage() {
                             </CardHeader>
                             <CardContent>
                                 <div className="text-3xl font-bold tracking-tighter">
-                                    {surplusCalories?.toLocaleString("fr-FR")}{" "}
+                                    {calculateSurplusCalories?.toLocaleString("fr-FR")}{" "}
                                     <span className="text-base font-normal text-muted-foreground">kcal/j</span>
                                 </div>
                             </CardContent>

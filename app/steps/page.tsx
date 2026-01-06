@@ -1,4 +1,3 @@
-"use strict";
 "use client";
 
 import { Button } from "@/components/ui/button";
@@ -7,18 +6,26 @@ import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Sheet, SheetClose, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { calculateCaloriesAcswWalking } from "@/lib/calculators/steps";
 import { useUserStore } from "@/stores/user-store";
-import { Calculator, Footprints, RotateCcw, Ruler } from "lucide-react";
+import { Calculator, ChevronDown, Flame, Footprints, Info, RotateCcw, Ruler } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
 import { toast } from "sonner";
 
 export default function StepsPage() {
-    const { height, customStrideLength, updateUser } = useUserStore();
+    const { height, weight, customStrideLength, updateUser } = useUserStore();
 
     // Calculator State (Distance -> Steps)
     const [distanceStr, setDistanceStr] = useState("");
     const [unit, setUnit] = useState<"km" | "m">("km");
+
+    // Advanced Options State
+    const [showAdvanced, setShowAdvanced] = useState(false);
+    const [inclineStr, setInclineStr] = useState("0");
+    const [intensityMode, setIntensityMode] = useState<"duration" | "speed">("duration");
+    const [durationStr, setDurationStr] = useState("");
+    const [speedStr, setSpeedStr] = useState("");
 
     // Calculator State (Steps -> Distance)
     const [stepsInputStr, setStepsInputStr] = useState("");
@@ -40,11 +47,29 @@ export default function StepsPage() {
     // 3. Calculate Steps (Distance -> Steps)
     let stepsResult: number | null = null;
     const distanceVal = parseFloat(distanceStr.replace(",", "."));
+    const distanceMeters = !isNaN(distanceVal) && distanceVal > 0 ? (unit === "km" ? distanceVal * 1000 : distanceVal) : 0;
 
-    if (!isNaN(distanceVal) && distanceVal > 0 && effectiveStride) {
-        const distanceInMeters = unit === "km" ? distanceVal * 1000 : distanceVal;
-        stepsResult = Math.round(distanceInMeters / effectiveStride);
+    if (distanceMeters > 0 && effectiveStride) {
+        stepsResult = Math.round(distanceMeters / effectiveStride);
     }
+
+    // 3b. Calculate Calories (ACSM Walking)
+    // Inputs
+    const inclinePct = parseFloat(inclineStr.replace(",", ".")) || 0;
+    const durationMin = durationStr ? parseFloat(durationStr.replace(",", ".")) : undefined;
+    const speedKmh = speedStr ? parseFloat(speedStr.replace(",", ".")) : undefined;
+
+    // Calculation (only valid if we have weight and (duration or speed))
+    const caloriesResult =
+        weight && distanceMeters > 0
+            ? calculateCaloriesAcswWalking({
+                  distanceMeters,
+                  weightKg: weight,
+                  inclinePct,
+                  durationMin: intensityMode === "duration" ? durationMin : undefined,
+                  speedKmh: intensityMode === "speed" ? speedKmh : undefined,
+              })
+            : null;
 
     // 4. Calculate Distance (Steps -> Distance)
     let distanceResultMeters: number | null = null;
@@ -99,7 +124,7 @@ export default function StepsPage() {
             </div>
 
             {/* Main Calculator Card */}
-            <div className="rounded-xl border bg-card text-card-foreground shadow-sm">
+            <div className="rounded-xl border bg-card text-card-foreground shadow-sm overflow-hidden">
                 <Tabs defaultValue="dist-to-steps" className="w-full">
                     <div className="p-6 pb-0">
                         <TabsList className="grid w-full grid-cols-2 max-w-[400px]">
@@ -143,7 +168,92 @@ export default function StepsPage() {
                                 </div>
                             </div>
 
-                            {/* Result Section */}
+                            {/* Advanced Options Accordion */}
+                            <div className="rounded-lg border bg-muted/40 overflow-hidden">
+                                <button
+                                    onClick={() => setShowAdvanced(!showAdvanced)}
+                                    className="w-full flex items-center justify-between p-4 text-sm font-medium hover:bg-muted/60 transition-colors"
+                                >
+                                    <span>Options avancées (Calories)</span>
+                                    <ChevronDown className={`size-4 transition-transform duration-200 ${showAdvanced ? "rotate-180" : ""}`} />
+                                </button>
+                                {showAdvanced && (
+                                    <div className="p-4 pt-0 space-y-4 animate-in slide-in-from-top-2">
+                                        <Separator className="mb-4" />
+
+                                        {/* Incline */}
+                                        <div className="space-y-2">
+                                            <div className="flex items-center justify-between">
+                                                <Label htmlFor="incline">Inclinaison (%)</Label>
+                                                <span className="text-xs text-muted-foreground">Pente (ex: 0 = plat)</span>
+                                            </div>
+                                            <Input
+                                                id="incline"
+                                                type="number"
+                                                min="0"
+                                                max="30"
+                                                value={inclineStr}
+                                                onChange={(e) => setInclineStr(e.target.value)}
+                                                placeholder="0"
+                                            />
+                                        </div>
+
+                                        {/* Intensity Mode Toggle */}
+                                        <div className="space-y-3">
+                                            <Label>Intensité (pour calcul calories)</Label>
+                                            <div className="flex rounded-md border bg-muted p-1">
+                                                <button
+                                                    onClick={() => setIntensityMode("duration")}
+                                                    className={`flex-1 px-3 py-1.5 rounded-sm text-sm font-medium transition-all ${
+                                                        intensityMode === "duration" ? "bg-background shadow-sm" : "hover:bg-background/50"
+                                                    }`}
+                                                >
+                                                    Durée (min)
+                                                </button>
+                                                <button
+                                                    onClick={() => setIntensityMode("speed")}
+                                                    className={`flex-1 px-3 py-1.5 rounded-sm text-sm font-medium transition-all ${
+                                                        intensityMode === "speed" ? "bg-background shadow-sm" : "hover:bg-background/50"
+                                                    }`}
+                                                >
+                                                    Vitesse (km/h)
+                                                </button>
+                                            </div>
+
+                                            {intensityMode === "duration" ? (
+                                                <Input
+                                                    type="number"
+                                                    placeholder="Durée en minutes (ex: 45)"
+                                                    value={durationStr}
+                                                    onChange={(e) => setDurationStr(e.target.value)}
+                                                />
+                                            ) : (
+                                                <Input
+                                                    type="number"
+                                                    placeholder="Vitesse en km/h (ex: 5.0)"
+                                                    value={speedStr}
+                                                    onChange={(e) => setSpeedStr(e.target.value)}
+                                                />
+                                            )}
+                                        </div>
+
+                                        {/* Weight Warning */}
+                                        {!weight && (
+                                            <div className="rounded-md bg-yellow-500/15 p-3 text-sm text-yellow-700 dark:text-yellow-400 flex items-start gap-2">
+                                                <Info className="size-4 mt-0.5 shrink-0" />
+                                                <div className="flex-1">
+                                                    Pour estimer les calories, votre poids est nécessaire.
+                                                    <Link href="/profile" className="block font-semibold hover:underline mt-1">
+                                                        Renseigner mon poids &rarr;
+                                                    </Link>
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* Result Section (Steps) */}
                             <div className="rounded-lg bg-primary/5 p-6 flex flex-col items-center justify-center min-h-[160px] relative overflow-hidden">
                                 {!effectiveStride ? (
                                     <div className="text-center space-y-3 z-10">
@@ -170,6 +280,36 @@ export default function StepsPage() {
                                 {/* Background Decor */}
                                 <Footprints className="absolute -bottom-8 -right-8 w-48 h-48 text-primary/5 rotate-[-15deg] pointer-events-none" />
                             </div>
+
+                            {/* Result Section (Calories) */}
+                            {caloriesResult && (
+                                <div className="rounded-lg border bg-card p-4 space-y-3 animate-in slide-in-from-bottom-2 fade-in">
+                                    <div className="flex items-center gap-2 text-primary font-semibold">
+                                        <Flame className="size-5 text-orange-500 fill-orange-500" />
+                                        Calories Brûlées
+                                    </div>
+
+                                    <div className="flex items-baseline gap-2">
+                                        <span className="text-4xl font-bold tracking-tight">{Math.round(caloriesResult.kcalTotal)}</span>
+                                        <span className="text-muted-foreground font-medium">kcal</span>
+                                    </div>
+
+                                    <div className="grid grid-cols-2 gap-2 text-xs text-muted-foreground pt-2 border-t mt-2">
+                                        <div>
+                                            <span className="block opacity-70">Intensité</span>
+                                            <span className="font-medium text-foreground">
+                                                {caloriesResult.speedKmh.toFixed(1)} km/h
+                                                {inclinePct > 0 ? ` (+${inclinePct}%)` : ""}
+                                            </span>
+                                        </div>
+                                        <div>
+                                            <span className="block opacity-70">Dépense estimée</span>
+                                            <span className="font-medium text-foreground">{caloriesResult.kcalPerMin.toFixed(1)} kcal/min</span>
+                                        </div>
+                                        <div className="col-span-2 text-[10px] mt-1 opacity-50">Modèle: ACSM Walking Equation</div>
+                                    </div>
+                                </div>
+                            )}
                         </TabsContent>
 
                         <TabsContent value="steps-to-dist" className="space-y-6 m-0">
@@ -313,12 +453,12 @@ export default function StepsPage() {
                 </h3>
                 <ul className="list-disc pl-5 space-y-1">
                     <li>
-                        <strong>Estimation :</strong> Basée sur votre taille ({height ? `${height} cm` : "?"}) avec la formule <em>Taille × 0.413</em>
-                        .
+                        <strong>Pas :</strong> Estimation basée sur votre taille ({height ? `${height} cm` : "?"}) avec la formule{" "}
+                        <em>Taille × 0.413</em>.
                     </li>
                     <li>
-                        <strong>Calibration :</strong> Remplace l&apos;estimation par votre longueur de pas réelle. Recommandé pour la marche sportive
-                        ou la randonnée.
+                        <strong>Calories :</strong> Utilise l&apos;équation de marche de l&apos;ACSM qui prend en compte votre poids, la vitesse et
+                        l&apos;inclinaison du terrain.
                     </li>
                 </ul>
             </div>

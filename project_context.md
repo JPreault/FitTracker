@@ -72,7 +72,7 @@ L’application **n’est pas médicale**. Tous les calculs sont des **estimatio
 
 | Champ         | Type                        | Obligatoire | Rôle            |
 | ------------- | --------------------------- | ----------- | --------------- |
-| sex           | male | female | unspecified | oui         | requis pour BMR |
+| gender           | male | female | unspecified | oui         | requis pour BMR |
 | ageYears      | number | null               | oui         | requis pour BMR |
 | heightCm      | number | null               | non         | foulée / BMR    |
 | weightKg      | number | null               | non         | BMR             |
@@ -139,6 +139,171 @@ Cette valeur devient prioritaire sur la foulée estimée.
   * distance entrée
   * foulée utilisée
   * méthode (estimée / calibrée)
+
+---
+
+### Mise à jour demandée
+
+Nous faisons évoluer la mini-app **Distance → Pas** pour ajouter (1) un champ optionnel **Inclinaison (%)** avec valeur par défaut **0**, caché dans un **Accordion** (non obligatoire), et (2) un calcul additionnel des **calories brûlées** en plus du résultat principal (pas ou distance selon le mode).
+Concrètement, il faut **ajouter l’inclinaison au modèle de calcul**, l’exposer dans l’UI via un Accordion, et implémenter une fonction de calcul des calories basée sur un modèle reconnu (ACSM), en s’appuyant sur la distance et une donnée permettant d’obtenir une vitesse (temps ou vitesse), puis afficher clairement les hypothèses et garde-fous.
+
+---
+
+## Spécification technique — ajout Inclinaison + Calories brûlées
+
+### 1) Nouveau champ : Inclinaison (%)
+
+**But :** permettre à l’utilisateur de renseigner une pente pour affiner l’estimation énergétique.
+**Valeur par défaut :** `0` (plat).
+**UI :** champ caché dans un **Accordion** (ex. “Options avancées”).
+**Type :** `number` (pourcentage).
+**Stockage :** local state (mini-app) ou profil (optionnel). Pour MVP : **local state**.
+
+**Validation recommandée :**
+
+* `inclinePct` ∈ `[0, 30]` (au-delà : avertissement ou blocage selon politique)
+
+**Conversion :**
+
+* `grade = inclinePct / 100` (forme décimale)
+
+---
+
+### 2) Calcul des calories brûlées (modèle exact)
+
+#### Problème clé (à intégrer dans l’implémentation)
+
+Pour calculer des calories, il faut **une durée** (ou une **vitesse**) en plus de la distance.
+➡️ Donc il faut **au moins une des deux entrées** suivantes :
+
+* `speedKmh` (vitesse en km/h), **ou**
+* `durationMin` (durée en minutes)
+
+**Recommandation MVP (fiable + simple) :**
+
+* Ajouter un champ optionnel `duration` **ou** `speed`, placé dans le même Accordion “Options avancées”.
+* Si aucune des deux n’est renseignée : **ne pas afficher de calories** (ou afficher “Renseigner un temps ou une vitesse pour estimer les calories”).
+
+---
+
+## 2.1 Formule ACSM (marche) avec inclinaison
+
+Modèle ACSM “walking” (tapis / vitesse stable) pour estimer la consommation d’oxygène : ([IR UA][1])
+
+**Variables :**
+
+* `S` = vitesse en **m/min**
+* `G` = inclinaison en **fraction** (ex: 5% → 0.05)
+* `VO2` en **mL/kg/min**
+* `W` = poids en **kg**
+
+**Étapes :**
+
+1. Convertir la vitesse en m/min
+   Si l’utilisateur fournit `speedKmh` :
+
+* `S = speedKmh * 1000 / 60`
+
+Si l’utilisateur fournit `durationMin` et que tu as `distanceMeters` :
+
+* `S = distanceMeters / durationMin`
+
+2. Convertir l’inclinaison :
+
+* `G = inclinePct / 100`
+
+3. Calcul VO2 (marche) :
+
+```text
+VO2 = 0.1 * S + 1.8 * S * G + 3.5
+```
+
+([IR UA][1])
+
+4. Conversion en kcal/min (équation standard dérivée des MET/VO2) :
+
+```text
+kcalPerMin = (VO2 * W) / 200
+```
+
+([Starlight Tools][2])
+
+5. Calories totales :
+
+```text
+kcalTotal = kcalPerMin * durationMin
+```
+
+---
+
+## 2.2 Variante (course) si tu veux gérer running plus tard
+
+Équation ACSM “running” (si tu ajoutes un toggle marche/course) : ([MDPI][3])
+
+```text
+VO2 = 0.2 * S + 0.9 * S * G + 3.5
+kcalPerMin = (VO2 * W) / 200
+kcalTotal = kcalPerMin * durationMin
+```
+
+---
+
+## 3) Intégration dans la mini-app Steps
+
+### 3.1 Données nécessaires
+
+* distance (déjà présent)
+* unité (déjà présent)
+* foulée (déjà présent)
+* **inclinePct** (nouveau, default 0)
+* **durationMin OU speedKmh** (nouveau, optionnel)
+* `weightKg` depuis le profil (requis pour calories)
+
+### 3.2 Règles métier / affichage
+
+* Si `weightKg` absent → afficher CTA “Renseigner mon poids” (comme la taille pour la foulée).
+* Si `durationMin` ET `speedKmh` sont absents → ne pas afficher les calories (ou afficher un hint).
+* Si `inclinePct` = 0 → considérer “plat”, aucune mention spéciale nécessaire.
+* Afficher dans “Détails” :
+
+  * vitesse utilisée (déduite ou saisie)
+  * inclinaison
+  * modèle : “ACSM Walking Equation”
+  * kcal/min + kcal total
+
+### 3.3 Garde-fous recommandés
+
+* `durationMin > 0`, `speedKmh > 0`
+* `S` (m/min) cohérent :
+
+  * marche typique : ~40–120 m/min (2.4–7.2 km/h)
+    Si hors plage → warning “valeur atypique” (sans bloquer forcément).
+* `inclinePct` borné (0–30)
+
+---
+
+## 4) Ce que l’agent doit modifier exactement
+
+1. **UI**
+
+* Ajouter un **Accordion “Options avancées”** contenant :
+
+  * Inclinaison (%) — default `0`
+  * Temps (min) **ou** Vitesse (km/h) — optionnels
+* Ajouter un bloc “Calories brûlées” dans la carte résultat (si calculable).
+
+2. **Store / Profil**
+
+* Aucun changement obligatoire au store pour l’inclinaison (MVP : state local).
+* S’assurer que `weightKg` est bien disponible dans le profil (déjà le cas).
+
+3. **Logique**
+
+* Extraire la logique dans une fonction pure, ex :
+
+  * `calculateSteps(distanceMeters, strideMeters): number`
+  * `calculateCaloriesAcswWalking({ distanceMeters, durationMin?, speedKmh?, inclinePct, weightKg }): { kcalTotal, kcalPerMin, speedMMin, vo2 } | null`
+* Afficher un résultat “calories” uniquement si les inputs requis sont présents (poids + durée ou vitesse + distance).
 
 ---
 
@@ -572,4 +737,5 @@ Roadmap :
 - page scrollable avec header fix (fond en mode glass blur) ✅
 - pour les steps/km, renseigner le potentiel degré d'inclinaison (0 par défaut)
 - pour les steps/km, calculer les calories brulé en fonction des infos de poids/age/genre
-- pour les macros, prendre par défaut la cible calorique de maintien calculé dans l'onglet "Calories" (décentraliser la logique de calcul dans un fonction externe)
+- pour les macros, prendre par défaut la cible calorique de maintien calculée dans l'onglet "Calories" (décentraliser la logique de calcul dans un fonction externe) ✅
+- og image dynamique
