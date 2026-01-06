@@ -88,12 +88,12 @@ export default function RootLayout({
                 <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
                     <SidebarProvider>
                         <AppSidebar />
-                        <main className="w-full flex flex-col p-4">
-                            <div className="w-full flex justify-between items-center">
+                        <main className="w-full flex flex-col">
+                            <div className="w-full flex justify-between items-center sticky top-0 backdrop-blur-xs p-4">
                                 <SidebarTrigger />
                                 <ModeToggle />
                             </div>
-                            {children}
+                            <div className="p-4">{children}</div>
                             <Toaster richColors />
                         </main>
                     </SidebarProvider>

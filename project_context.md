@@ -565,3 +565,11 @@ Donner une estimation journalière de besoins hydriques, avec ajustements simple
 - Afficher “Base (ml/kg)” + ajustements choisis
 - Résultat en litres/j
 - Toggle “Il fait chaud” / “Je fais du sport”
+
+Roadmap : 
+- lien vers mon site perso en target blank et rel nofollow ✅
+- ajout d'une logique de partage du site (partage des résultats ? Juste un bouton du site ?)
+- page scrollable avec header fix (fond en mode glass blur) ✅
+- pour les steps/km, renseigner le potentiel degré d'inclinaison (0 par défaut)
+- pour les steps/km, calculer les calories brulé en fonction des infos de poids/age/genre
+- pour les macros, prendre par défaut la cible calorique de maintien calculé dans l'onglet "Calories" (décentraliser la logique de calcul dans un fonction externe)
