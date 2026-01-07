@@ -1,7 +1,7 @@
 "use client";
 
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { useSessionStore } from "@/stores/session-store";
 import { useWorkoutStore } from "@/stores/workout-store";
@@ -21,6 +21,7 @@ export default function WorkoutRunPage() {
     const [currentTime, setCurrentTime] = useState(0);
     const [phase, setPhase] = useState<WorkoutPhase>("exercise");
     const [pauseTimer, setPauseTimer] = useState<number | null>(null);
+    const [pauseInitialDuration, setPauseInitialDuration] = useState<number>(0);
 
     const session = activeWorkout ? sessions.find((s) => s.id === activeWorkout.sessionId) : null;
 
@@ -72,7 +73,8 @@ export default function WorkoutRunPage() {
                 }
                 // Pause entre blocs
                 setPhase("between-blocks");
-                setPauseTimer(block.pause);
+                setPauseTimer(block.pauseBeforeNext);
+                setPauseInitialDuration(block.pauseBeforeNext);
                 updateWorkoutState({
                     blockIndex: nextBlockIndex,
                     blockRepetition: 1,
@@ -84,6 +86,7 @@ export default function WorkoutRunPage() {
                 // Nouvelle répétition du bloc
                 setPhase("between-exercises");
                 setPauseTimer(block.pause);
+                setPauseInitialDuration(block.pause);
                 updateWorkoutState({
                     blockRepetition: activeWorkout.blockRepetition + 1,
                     exerciseIndex: 0,
@@ -95,6 +98,7 @@ export default function WorkoutRunPage() {
             // Passer à l'exo suivant dans le bloc
             setPhase("between-exercises");
             setPauseTimer(block.betweenExos);
+            setPauseInitialDuration(block.betweenExos);
             updateWorkoutState({
                 exerciseIndex: nextExerciseIndex,
                 currentTimer: null,
@@ -152,6 +156,7 @@ export default function WorkoutRunPage() {
     useEffect(() => {
         if (phase !== "between-exercises" && phase !== "between-blocks") {
             setPauseTimer(null);
+            setPauseInitialDuration(0);
             return;
         }
 
@@ -271,38 +276,149 @@ export default function WorkoutRunPage() {
 
             {/* Phase de pause entre blocs (Card séparée) */}
             {phase === "between-blocks" && pauseTimer !== null && (
-                <Card className="border-primary">
-                    <CardContent className="py-12 text-center">
-                        <div className="space-y-6">
-                            <div className="text-6xl font-bold text-primary">{formatTime(pauseTimer)}</div>
-                            <p className="text-muted-foreground">Pause entre blocs</p>
+                <>
+                    {/* Liste des blocs de la séance */}
+                    <Card>
+                        <CardHeader>
+                            <CardTitle>Blocs de la séance</CardTitle>
+                        </CardHeader>
+                        <CardContent>
+                            <div className="flex gap-3 overflow-x-auto pb-2">
+                                {session.blocks.map((block, index) => (
+                                    <>
+                                        <div
+                                            key={block.id}
+                                            className={cn(
+                                                "shrink-0 rounded-lg border p-4 min-w-[200px] transition-colors",
+                                                index === activeWorkout.blockIndex && phase !== "between-blocks"
+                                                    ? "border-primary bg-primary/5"
+                                                    : index < activeWorkout.blockIndex
+                                                    ? "border-muted bg-muted/30 opacity-60"
+                                                    : "border-muted bg-background"
+                                            )}
+                                        >
+                                            <p className="font-medium mb-1">{block.name}</p>
+                                            <p className="text-sm text-muted-foreground">
+                                                {block.repetitions} répétition{block.repetitions > 1 ? "s" : ""} • {block.exos.length} exercice
+                                                {block.exos.length > 1 ? "s" : ""}
+                                            </p>
+                                        </div>
+                                        {/* Pause entre blocs (sauf après le dernier) */}
+                                        {index < session.blocks.length - 1 && (
+                                            <div
+                                                key={`pause-block-${block.id}`}
+                                                className={cn(
+                                                    "shrink-0 rounded-lg border p-2 min-w-[70px] transition-colors flex flex-col items-center justify-center gap-1",
+                                                    phase === "between-blocks" && activeWorkout.blockIndex === index + 1
+                                                        ? "border-primary bg-primary/5"
+                                                        : index < activeWorkout.blockIndex
+                                                        ? "border-muted bg-muted/30 opacity-60"
+                                                        : "border-muted bg-background"
+                                                )}
+                                            >
+                                                <Pause className="size-4 text-muted-foreground" />
+                                                <p className="text-xs text-muted-foreground">{block.pauseBeforeNext}s</p>
+                                            </div>
+                                        )}
+                                    </>
+                                ))}
+                            </div>
+                        </CardContent>
+                    </Card>
 
-                            {/* Affichage du prochain bloc pendant la pause entre blocs */}
-                            {nextBlock && (
-                                <div className="mt-8 pt-6 border-t space-y-2">
-                                    <p className="text-sm text-muted-foreground uppercase tracking-wide">Prochain bloc</p>
-                                    <p className="text-2xl font-bold">{nextBlock.name}</p>
-                                    <p className="text-base text-muted-foreground">
-                                        {nextBlock.repetitions} répétition{nextBlock.repetitions > 1 ? "s" : ""} • {nextBlock.exos.length} exercice
-                                        {nextBlock.exos.length > 1 ? "s" : ""}
-                                    </p>
+                    <Card className="border-primary">
+                        <CardContent className="py-12">
+                            <div className="rounded-lg border-2 border-primary bg-primary/5 p-6 relative overflow-hidden transition-all duration-500">
+                                {/* Animation de progression pour la pause entre blocs */}
+                                {pauseInitialDuration > 0 && (
+                                    <div
+                                        key={`pause-between-blocks-${activeWorkout.blockIndex}`}
+                                        className="absolute inset-0 bg-primary/20"
+                                        style={{
+                                            animation:
+                                                Math.max(0, pauseInitialDuration) > 0
+                                                    ? `progress-fill ${Math.max(0, pauseInitialDuration)}s linear forwards`
+                                                    : "none",
+                                        }}
+                                    />
+                                )}
+                                <div className="relative space-y-6 text-center">
+                                    <div className="text-6xl font-bold text-primary">{formatTime(pauseTimer)}</div>
+                                    <p className="text-muted-foreground">Pause entre blocs</p>
+
+                                    {/* Affichage du prochain bloc pendant la pause entre blocs */}
+                                    {nextBlock && (
+                                        <div className="mt-8 pt-6 border-t space-y-2">
+                                            <p className="text-sm text-muted-foreground uppercase tracking-wide">Prochain bloc</p>
+                                            <p className="text-2xl font-bold">{nextBlock.name}</p>
+                                            <p className="text-base text-muted-foreground">
+                                                {nextBlock.repetitions} répétition{nextBlock.repetitions > 1 ? "s" : ""} • {nextBlock.exos.length}{" "}
+                                                exercice
+                                                {nextBlock.exos.length > 1 ? "s" : ""}
+                                            </p>
+                                        </div>
+                                    )}
                                 </div>
-                            )}
-                        </div>
-                    </CardContent>
-                </Card>
+                            </div>
+                        </CardContent>
+                    </Card>
+                </>
             )}
 
             {/* Phase d'exercice ou pause entre exercices */}
             {((phase === "exercise" && !activeWorkout.isPaused) || phase === "between-exercises") && (
                 <>
+                    {/* Liste des blocs de la séance */}
+                    <Card>
+                        <CardHeader>
+                            <CardTitle>Blocs de la séance</CardTitle>
+                        </CardHeader>
+                        <CardContent>
+                            <div className="flex gap-3 overflow-x-auto pb-2">
+                                {session.blocks.map((block, index) => (
+                                    <>
+                                        <div
+                                            key={block.id}
+                                            className={cn(
+                                                "shrink-0 rounded-lg border p-4 min-w-[200px] transition-colors",
+                                                index === activeWorkout.blockIndex
+                                                    ? "border-primary bg-primary/5"
+                                                    : index < activeWorkout.blockIndex
+                                                    ? "border-muted bg-muted/30 opacity-60"
+                                                    : "border-muted bg-background"
+                                            )}
+                                        >
+                                            <p className="font-medium mb-1">{block.name}</p>
+                                            <p className="text-sm text-muted-foreground">
+                                                {block.repetitions} répétition{block.repetitions > 1 ? "s" : ""} • {block.exos.length} exercice
+                                                {block.exos.length > 1 ? "s" : ""}
+                                            </p>
+                                        </div>
+                                        {/* Pause entre blocs (sauf après le dernier) */}
+                                        {index < session.blocks.length - 1 && (
+                                            <div
+                                                key={`pause-block-${block.id}`}
+                                                className={cn(
+                                                    "shrink-0 rounded-lg border p-2 min-w-[70px] transition-colors flex flex-col items-center justify-center gap-1",
+                                                    index < activeWorkout.blockIndex
+                                                        ? "border-muted bg-muted/30 opacity-60"
+                                                        : "border-muted bg-background"
+                                                )}
+                                            >
+                                                <Pause className="size-4 text-muted-foreground" />
+                                                <p className="text-xs text-muted-foreground">{block.pauseBeforeNext}s</p>
+                                            </div>
+                                        )}
+                                    </>
+                                ))}
+                            </div>
+                        </CardContent>
+                    </Card>
+
                     {/* Bloc en cours */}
                     <Card>
                         <CardHeader>
-                            <CardTitle className="text-2xl">{currentBlock.name}</CardTitle>
-                            <CardDescription className="text-base font-semibold text-foreground">
-                                Répétition {activeWorkout.blockRepetition}/{currentBlock.repetitions}
-                            </CardDescription>
+                            <CardTitle className="text-2xl w-full">{currentBlock.name}</CardTitle>
                         </CardHeader>
                         <CardContent>
                             <div className="space-y-4">
@@ -310,33 +426,60 @@ export default function WorkoutRunPage() {
                                 {phase === "between-exercises" && pauseTimer !== null ? (
                                     <div className="rounded-lg border-2 border-primary bg-primary/5 p-6 relative overflow-hidden transition-all duration-500">
                                         {/* Animation de progression pour la pause */}
-                                        <div
-                                            className="absolute inset-0 bg-primary/20 transition-all duration-1000 ease-linear"
-                                            style={{
-                                                width: `${(((currentBlock.betweenExos - pauseTimer) / currentBlock.betweenExos) * 100).toFixed(2)}%`,
-                                                left: 0,
-                                                top: 0,
-                                                height: "100%",
-                                            }}
-                                        />
+                                        {pauseInitialDuration > 0 && (
+                                            <div
+                                                key={`pause-between-exos-${activeWorkout.blockIndex}-${activeWorkout.exerciseIndex}-${activeWorkout.blockRepetition}`}
+                                                className="absolute inset-0 bg-primary/20"
+                                                style={{
+                                                    animation:
+                                                        Math.max(0, pauseInitialDuration) > 0
+                                                            ? `progress-fill ${Math.max(0, pauseInitialDuration)}s linear forwards`
+                                                            : "none",
+                                                }}
+                                            />
+                                        )}
                                         <div className="relative space-y-4 text-center">
                                             <div className="space-y-2">
                                                 <div className="text-6xl font-bold text-primary">{formatTime(pauseTimer)}</div>
-                                                <p className="text-muted-foreground">Pause entre exercices</p>
+                                                <p className="text-muted-foreground">
+                                                    {activeWorkout.exerciseIndex === 0 && activeWorkout.blockRepetition > 1
+                                                        ? "Pause entre répétitions"
+                                                        : "Pause entre exercices"}
+                                                </p>
                                             </div>
-                                            {nextExercise && (
+                                            {/* Afficher les répétitions restantes si c'est une pause entre répétitions */}
+                                            {activeWorkout.exerciseIndex === 0 && activeWorkout.blockRepetition > 1 ? (
                                                 <div className="mt-6 pt-6 border-t space-y-2">
-                                                    <p className="text-sm text-muted-foreground uppercase tracking-wide">Prochain exercice</p>
-                                                    <p className="text-2xl font-bold">{nextExercise.name}</p>
-                                                    {nextExercise.member && <p className="text-base text-muted-foreground">par {nextExercise.member}</p>}
-                                                    <div className="flex items-center justify-center gap-2 mt-2">
-                                                        <span className="text-lg font-semibold">
-                                                            {nextExercise.type === "duration"
-                                                                ? `${nextExercise.value} secondes${nextExercise.member ? ` par ${nextExercise.member}` : ""}`
-                                                                : `${nextExercise.value} répétitions${nextExercise.member ? ` par ${nextExercise.member}` : ""}`}
-                                                        </span>
-                                                    </div>
+                                                    <p className="text-sm text-muted-foreground uppercase tracking-wide">Répétitions restantes</p>
+                                                    <p className="text-4xl font-bold text-primary">
+                                                        {currentBlock.repetitions - activeWorkout.blockRepetition + 1}
+                                                    </p>
+                                                    <p className="text-base text-muted-foreground">
+                                                        sur {currentBlock.repetitions} répétition{currentBlock.repetitions > 1 ? "s" : ""}
+                                                    </p>
                                                 </div>
+                                            ) : (
+                                                /* Afficher le prochain exercice si c'est une pause entre exercices */
+                                                nextExercise && (
+                                                    <div className="mt-6 pt-6 border-t space-y-2">
+                                                        <p className="text-sm text-muted-foreground uppercase tracking-wide">Prochain exercice</p>
+                                                        <p className="text-2xl font-bold">{nextExercise.name}</p>
+                                                        {nextExercise.member && (
+                                                            <p className="text-base text-muted-foreground">par {nextExercise.member}</p>
+                                                        )}
+                                                        <div className="flex items-center justify-center gap-2 mt-2">
+                                                            <span className="text-lg font-semibold">
+                                                                {nextExercise.type === "duration"
+                                                                    ? `${nextExercise.value} secondes${
+                                                                          nextExercise.member ? ` par ${nextExercise.member}` : ""
+                                                                      }`
+                                                                    : `${nextExercise.value} répétitions${
+                                                                          nextExercise.member ? ` par ${nextExercise.member}` : ""
+                                                                      }`}
+                                                            </span>
+                                                        </div>
+                                                    </div>
+                                                )
                                             )}
                                         </div>
                                     </div>
@@ -346,12 +489,13 @@ export default function WorkoutRunPage() {
                                         {/* Animation de progression pour les exercices avec timer */}
                                         {currentExercise.type === "duration" && activeWorkout.currentTimer !== null && (
                                             <div
-                                                className="absolute inset-0 bg-primary/20 transition-all duration-1000 ease-linear"
+                                                key={`exercise-progress-${activeWorkout.blockIndex}-${activeWorkout.exerciseIndex}-${activeWorkout.blockRepetition}`}
+                                                className="absolute inset-0 bg-primary/20"
                                                 style={{
-                                                    width: `${(((currentExercise.value - activeWorkout.currentTimer) / currentExercise.value) * 100).toFixed(2)}%`,
-                                                    left: 0,
-                                                    top: 0,
-                                                    height: "100%",
+                                                    animation:
+                                                        currentExercise.value > 0
+                                                            ? `progress-fill ${currentExercise.value}s linear forwards`
+                                                            : "none",
                                                 }}
                                             />
                                         )}
@@ -369,7 +513,9 @@ export default function WorkoutRunPage() {
                                                             {currentExercise.member ? `secondes par ${currentExercise.member}` : "secondes"}
                                                         </span>
                                                     </div>
-                                                    {!currentExercise.member && <p className="text-base font-medium text-foreground">Temps restant</p>}
+                                                    {!currentExercise.member && (
+                                                        <p className="text-base font-medium text-foreground">Temps restant</p>
+                                                    )}
                                                 </div>
                                             ) : (
                                                 <div className="space-y-2">
@@ -395,30 +541,73 @@ export default function WorkoutRunPage() {
                     {/* Liste des exos du bloc */}
                     <Card>
                         <CardHeader>
-                            <CardTitle>Exercices du bloc</CardTitle>
+                            <CardTitle className="flex items-center justify-between">
+                                <p>
+                                    Exercices du bloc - <b>{currentBlock.name}</b>
+                                </p>
+                                <b>
+                                    Répétition {activeWorkout.blockRepetition}/{currentBlock.repetitions}
+                                </b>
+                            </CardTitle>
                         </CardHeader>
                         <CardContent>
                             <div className="flex gap-3 overflow-x-auto pb-2">
                                 {currentBlock.exos.map((exo, index) => (
+                                    <>
+                                        <div
+                                            key={exo.id}
+                                            className={cn(
+                                                "shrink-0 rounded-lg border p-4 min-w-[180px] transition-colors",
+                                                index === activeWorkout.exerciseIndex && phase === "exercise"
+                                                    ? "border-primary bg-primary/5"
+                                                    : index < activeWorkout.exerciseIndex
+                                                    ? "border-muted bg-muted/30 opacity-60"
+                                                    : "border-muted bg-background"
+                                            )}
+                                        >
+                                            <p className="font-medium mb-1">{exo.name}</p>
+                                            <p className="text-sm text-muted-foreground">
+                                                {exo.type === "duration"
+                                                    ? `${exo.value}s${exo.member ? ` par ${exo.member}` : ""}`
+                                                    : `${exo.value} rép.${exo.member ? ` par ${exo.member}` : ""}`}
+                                            </p>
+                                        </div>
+                                        {/* Pause entre exercices (sauf après le dernier) */}
+                                        {index < currentBlock.exos.length - 1 && (
+                                            <div
+                                                key={`pause-${exo.id}`}
+                                                className={cn(
+                                                    "shrink-0 rounded-lg border p-2 min-w-[70px] transition-colors flex flex-col items-center justify-center gap-1",
+                                                    phase === "between-exercises" && activeWorkout.exerciseIndex === index + 1
+                                                        ? "border-primary bg-primary/5"
+                                                        : index + 1 <= activeWorkout.exerciseIndex
+                                                        ? "border-muted bg-muted/30 opacity-60"
+                                                        : "border-muted bg-background"
+                                                )}
+                                            >
+                                                <Pause className="size-4 text-muted-foreground" />
+                                                <p className="text-xs text-muted-foreground">{currentBlock.betweenExos}s</p>
+                                            </div>
+                                        )}
+                                    </>
+                                ))}
+                                {/* Pause entre répétitions (après le dernier exercice, sauf si dernière répétition) */}
+                                {activeWorkout.blockRepetition < currentBlock.repetitions && (
                                     <div
-                                        key={exo.id}
+                                        key="pause-between-repetitions"
                                         className={cn(
-                                            "shrink-0 rounded-lg border p-4 min-w-[180px] transition-colors",
-                                            index === activeWorkout.exerciseIndex
+                                            "shrink-0 rounded-lg border p-2 min-w-[70px] transition-colors flex flex-col items-center justify-center gap-1",
+                                            phase === "between-exercises" && activeWorkout.exerciseIndex === 0 && activeWorkout.blockRepetition > 1
                                                 ? "border-primary bg-primary/5"
-                                                : index < activeWorkout.exerciseIndex
+                                                : activeWorkout.blockRepetition > 1
                                                 ? "border-muted bg-muted/30 opacity-60"
                                                 : "border-muted bg-background"
                                         )}
                                     >
-                                        <p className="font-medium mb-1">{exo.name}</p>
-                                        <p className="text-sm text-muted-foreground">
-                                            {exo.type === "duration"
-                                                ? `${exo.value}s${exo.member ? ` par ${exo.member}` : ""}`
-                                                : `${exo.value} rép.${exo.member ? ` par ${exo.member}` : ""}`}
-                                        </p>
+                                        <Pause className="size-4 text-muted-foreground" />
+                                        <p className="text-xs text-muted-foreground">{currentBlock.pause}s</p>
                                     </div>
-                                ))}
+                                )}
                             </div>
                         </CardContent>
                     </Card>

@@ -12,6 +12,7 @@ export interface Block {
     repetitions: number;
     pause: number; // secondes entre chaque répétition
     betweenExos: number; // secondes entre chaque exo du bloc
+    pauseBeforeNext: number; // secondes de transition avant le prochain bloc
     exos: Exercise[];
 }
 

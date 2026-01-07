@@ -861,6 +861,7 @@ function CreateBlockForm({ onSave }: { onSave: (block: Block) => void }) {
     const [repetitions, setRepetitions] = useState("1");
     const [pause, setPause] = useState("30");
     const [betweenExos, setBetweenExos] = useState("10");
+    const [pauseBeforeNext, setPauseBeforeNext] = useState("30");
     const [isOpen, setIsOpen] = useState(false);
 
     const handleSave = () => {
@@ -875,6 +876,7 @@ function CreateBlockForm({ onSave }: { onSave: (block: Block) => void }) {
             repetitions: parseInt(repetitions) || 1,
             pause: parseInt(pause) || 0,
             betweenExos: parseInt(betweenExos) || 0,
+            pauseBeforeNext: parseInt(pauseBeforeNext) || 0,
             exos: [],
         };
 
@@ -883,6 +885,7 @@ function CreateBlockForm({ onSave }: { onSave: (block: Block) => void }) {
         setRepetitions("1");
         setPause("30");
         setBetweenExos("10");
+        setPauseBeforeNext("30");
         setIsOpen(false);
     };
 
@@ -911,7 +914,7 @@ function CreateBlockForm({ onSave }: { onSave: (block: Block) => void }) {
                         />
                     </div>
 
-                    <div className="grid grid-cols-3 gap-4">
+                    <div className="grid grid-cols-2 gap-4">
                         <div className="space-y-3">
                             <Label htmlFor="block-reps">Répétitions</Label>
                             <Input
@@ -934,6 +937,9 @@ function CreateBlockForm({ onSave }: { onSave: (block: Block) => void }) {
                                 className="text-base"
                             />
                         </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
                         <div className="space-y-3">
                             <Label htmlFor="block-between">Entre exos (s)</Label>
                             <Input
@@ -942,6 +948,17 @@ function CreateBlockForm({ onSave }: { onSave: (block: Block) => void }) {
                                 min="0"
                                 value={betweenExos}
                                 onChange={(e) => setBetweenExos(e.target.value)}
+                                className="text-base"
+                            />
+                        </div>
+                        <div className="space-y-3">
+                            <Label htmlFor="block-pause-before-next">Avant prochain bloc (s)</Label>
+                            <Input
+                                id="block-pause-before-next"
+                                type="number"
+                                min="0"
+                                value={pauseBeforeNext}
+                                onChange={(e) => setPauseBeforeNext(e.target.value)}
                                 className="text-base"
                             />
                         </div>
@@ -980,6 +997,7 @@ function EditBlockForm({
     const [repetitions, setRepetitions] = useState(block.repetitions.toString());
     const [pause, setPause] = useState(block.pause.toString());
     const [betweenExos, setBetweenExos] = useState(block.betweenExos.toString());
+    const [pauseBeforeNext, setPauseBeforeNext] = useState((block.pauseBeforeNext ?? 0).toString());
 
     // Réinitialiser les valeurs quand le Sheet s'ouvre
     useEffect(() => {
@@ -988,6 +1006,7 @@ function EditBlockForm({
             setRepetitions(block.repetitions.toString());
             setPause(block.pause.toString());
             setBetweenExos(block.betweenExos.toString());
+            setPauseBeforeNext((block.pauseBeforeNext ?? 0).toString());
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [open]);
@@ -1003,6 +1022,7 @@ function EditBlockForm({
             repetitions: parseInt(repetitions) || 1,
             pause: parseInt(pause) || 0,
             betweenExos: parseInt(betweenExos) || 0,
+            pauseBeforeNext: parseInt(pauseBeforeNext) || 0,
         });
     };
 
@@ -1026,7 +1046,7 @@ function EditBlockForm({
                         />
                     </div>
 
-                    <div className="grid grid-cols-3 gap-4">
+                    <div className="grid grid-cols-2 gap-4">
                         <div className="space-y-3">
                             <Label htmlFor="edit-block-reps">Répétitions</Label>
                             <Input
@@ -1049,6 +1069,9 @@ function EditBlockForm({
                                 className="text-base"
                             />
                         </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
                         <div className="space-y-3">
                             <Label htmlFor="edit-block-between">Entre exos (s)</Label>
                             <Input
@@ -1057,6 +1080,17 @@ function EditBlockForm({
                                 min="0"
                                 value={betweenExos}
                                 onChange={(e) => setBetweenExos(e.target.value)}
+                                className="text-base"
+                            />
+                        </div>
+                        <div className="space-y-3">
+                            <Label htmlFor="edit-block-pause-before-next">Avant prochain bloc (s)</Label>
+                            <Input
+                                id="edit-block-pause-before-next"
+                                type="number"
+                                min="0"
+                                value={pauseBeforeNext}
+                                onChange={(e) => setPauseBeforeNext(e.target.value)}
                                 className="text-base"
                             />
                         </div>
