@@ -2,6 +2,7 @@
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { useSpeechSynthesis } from "@/hooks/use-speech-synthesis";
 import { cn } from "@/lib/utils";
 import { useSessionStore } from "@/stores/session-store";
 import { useWorkoutStore } from "@/stores/workout-store";
@@ -41,6 +42,19 @@ export default function WorkoutRunPage() {
     const lastAnnouncedKey = useRef<string>("");
     // Référence pour stocker le timeout en cours
     const currentTimeoutId = useRef<NodeJS.Timeout | null>(null);
+
+    // Hook de synthèse vocale amélioré
+    // Pour utiliser Azure ou Google Cloud, ajoutez les clés API dans les variables d'environnement
+    // et changez le provider : useSpeechSynthesis({ provider: "azure", azureKey: "...", azureRegion: "..." })
+    const { speak, stop } = useSpeechSynthesis({
+        provider: "native", // Options: "native" | "azure" | "google"
+        rate: 1.0,
+        pitch: 1.0,
+        volume: 1.0,
+        // azureKey: process.env.NEXT_PUBLIC_AZURE_SPEECH_KEY,
+        // azureRegion: process.env.NEXT_PUBLIC_AZURE_SPEECH_REGION,
+        // googleApiKey: process.env.NEXT_PUBLIC_GOOGLE_TTS_API_KEY,
+    });
 
     const session = activeWorkout ? sessions.find((s) => s.id === activeWorkout.sessionId) : null;
 
@@ -381,6 +395,7 @@ export default function WorkoutRunPage() {
     };
 
     const handlePause = () => {
+        stop(); // Arrêter la synthèse vocale en cours
         pauseWorkout();
         toast.info("Séance mise en pause");
         router.push("/workout");
@@ -398,26 +413,8 @@ export default function WorkoutRunPage() {
         return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
     };
 
-    // Fonction générique pour prononcer du texte
-    const speak = (text: string) => {
-        if (typeof window === "undefined" || !("speechSynthesis" in window)) {
-            return; // L'API n'est pas disponible
-        }
-
-        // Annuler toute annonce en cours
-        window.speechSynthesis.cancel();
-
-        // Petit délai pour s'assurer que l'annulation est complète avant de déclencher la nouvelle annonce
-        setTimeout(() => {
-            const utterance = new SpeechSynthesisUtterance(text);
-            utterance.lang = "fr-FR";
-            utterance.rate = 1.0;
-            utterance.pitch = 1.0;
-            utterance.volume = 1.0;
-
-            window.speechSynthesis.speak(utterance);
-        }, 100);
-    };
+    // La fonction speak est maintenant fournie par le hook useSpeechSynthesis
+    // Elle utilise automatiquement la meilleure voix française disponible
 
     // Prononcer l'instruction pour un exercice
     const speakExerciseInstruction = (exercise: Exercise) => {
