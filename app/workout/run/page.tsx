@@ -46,17 +46,40 @@ export default function WorkoutRunPage() {
     // Hook de synthèse vocale amélioré
     // Pour utiliser Azure ou Google Cloud, ajoutez les clés API dans les variables d'environnement
     // et changez le provider : useSpeechSynthesis({ provider: "azure", azureKey: "...", azureRegion: "..." })
-    const { speak, stop } = useSpeechSynthesis({
+    //
+    // Google Cloud inclut un système de quota automatique CÔTÉ SERVEUR qui bloque les appels si la limite est atteinte
+    // pour éviter les dépassements (gratuit jusqu'à 1M caractères/mois pour les voix neurales)
+    // La clé API Google doit être dans GOOGLE_TTS_API_KEY (côté serveur, pas NEXT_PUBLIC_)
+    const { speak, stop, quotaUsage, quotaExceeded, quotaLimit } = useSpeechSynthesis({
         provider: "native", // Options: "native" | "azure" | "google"
         rate: 1.0,
         pitch: 1.0,
         volume: 1.0,
         // azureKey: process.env.NEXT_PUBLIC_AZURE_SPEECH_KEY,
         // azureRegion: process.env.NEXT_PUBLIC_AZURE_SPEECH_REGION,
-        // googleApiKey: process.env.NEXT_PUBLIC_GOOGLE_TTS_API_KEY,
+        // Pour Google : plus besoin de clé API côté client, géré par /api/tts/google
+        // googleVoiceType: "neural", // "neural" (1M/mois) ou "standard" (4M/mois)
+        // googleLimit: 900000, // Optionnel : limite personnalisée (par défaut 90% de la limite)
     });
 
     const session = activeWorkout ? sessions.find((s) => s.id === activeWorkout.sessionId) : null;
+
+    // Afficher les informations de quota en mode développement (pour Google Cloud)
+    useEffect(() => {
+        if (process.env.NODE_ENV === "development" && quotaUsage && quotaLimit) {
+            const percentage = Math.round((quotaUsage.charactersUsed / quotaLimit) * 100);
+            if (percentage > 0) {
+                console.log(
+                    `📊 Quota Google TTS: ${quotaUsage.charactersUsed.toLocaleString()} / ${quotaLimit.toLocaleString()} caractères (${percentage}%)`
+                );
+                if (quotaExceeded) {
+                    console.warn("⚠️ Limite Google TTS atteinte, utilisation de l'API native");
+                } else if (percentage >= 80) {
+                    console.warn(`⚠️ Attention: ${percentage}% de la limite Google TTS utilisée`);
+                }
+            }
+        }
+    }, [quotaUsage, quotaLimit, quotaExceeded]);
 
     // Générer la queue complète de la séance
     const generateQueue = (): QueueItem[] => {

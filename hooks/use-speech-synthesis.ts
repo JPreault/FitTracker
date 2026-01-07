@@ -11,7 +11,23 @@ interface SpeechOptions {
     azureKey?: string;
     azureRegion?: string;
     googleApiKey?: string;
+    // Limites pour Google Cloud TTS (en caractères)
+    googleLimit?: number; // Limite personnalisée (par défaut 3.5M pour laisser une marge)
+    googleVoiceType?: "standard" | "neural"; // Type de voix (neural = 1M, standard = 4M)
 }
+
+interface QuotaUsage {
+    charactersUsed: number;
+    monthStart: string; // Format YYYY-MM
+    lastReset: number; // Timestamp
+}
+
+// Constantes pour les limites Google Cloud TTS
+const GOOGLE_STANDARD_LIMIT = 4_000_000; // 4 millions de caractères/mois
+const GOOGLE_NEURAL_LIMIT = 1_000_000; // 1 million de caractères/mois
+const DEFAULT_SAFETY_LIMIT = 3_500_000; // Limite de sécurité pour éviter de dépasser
+
+const STORAGE_KEY = "google_tts_quota";
 
 /**
  * Hook personnalisé pour la synthèse vocale avec support de plusieurs providers
@@ -31,13 +47,114 @@ export function useSpeechSynthesis(options: SpeechOptions = {}) {
         azureKey,
         azureRegion,
         googleApiKey,
+        googleLimit,
+        googleVoiceType = "neural", // Par défaut neural (meilleure qualité mais limite plus basse)
     } = options;
 
     const [isSpeaking, setIsSpeaking] = useState(false);
     const [isAvailable, setIsAvailable] = useState(false);
     const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
     const [bestFrenchVoice, setBestFrenchVoice] = useState<SpeechSynthesisVoice | null>(null);
+    const [quotaUsage, setQuotaUsage] = useState<QuotaUsage | null>(null);
+    const [quotaExceeded, setQuotaExceeded] = useState(false);
     const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
+
+    // Calculer la limite effective pour Google
+    const getGoogleLimit = useCallback(() => {
+        if (googleLimit) return googleLimit;
+        // Utiliser la limite selon le type de voix, avec une marge de sécurité
+        const baseLimit = googleVoiceType === "neural" ? GOOGLE_NEURAL_LIMIT : GOOGLE_STANDARD_LIMIT;
+        // Réduire de 10% pour laisser une marge de sécurité
+        return Math.floor(baseLimit * 0.9);
+    }, [googleLimit, googleVoiceType]);
+
+    // Gestion du quota Google Cloud TTS
+    const getCurrentMonth = useCallback(() => {
+        const now = new Date();
+        return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+    }, []);
+
+    const loadQuotaUsage = useCallback((): QuotaUsage | null => {
+        if (typeof window === "undefined") return null;
+        
+        try {
+            const stored = localStorage.getItem(STORAGE_KEY);
+            if (!stored) return null;
+            
+            const quota: QuotaUsage = JSON.parse(stored);
+            const currentMonth = getCurrentMonth();
+            
+            // Si on est dans un nouveau mois, réinitialiser le quota
+            if (quota.monthStart !== currentMonth) {
+                localStorage.removeItem(STORAGE_KEY);
+                return null;
+            }
+            
+            return quota;
+        } catch (error) {
+            console.error("Erreur lors du chargement du quota:", error);
+            return null;
+        }
+    }, [getCurrentMonth]);
+
+    const saveQuotaUsage = useCallback((quota: QuotaUsage) => {
+        if (typeof window === "undefined") return;
+        
+        try {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(quota));
+            setQuotaUsage(quota);
+        } catch (error) {
+            console.error("Erreur lors de la sauvegarde du quota:", error);
+        }
+    }, []);
+
+    // Note: Le quota Google est maintenant géré côté serveur via /api/tts/google
+    // Les fonctions addToQuota et checkQuota ont été supprimées car le quota
+    // est vérifié et mis à jour côté serveur pour éviter les contournements
+
+    // Charger le quota depuis le serveur au démarrage (pour Google)
+    const loadQuotaFromServer = useCallback(async () => {
+        if (provider !== "google") return;
+
+        try {
+            const response = await fetch("/api/tts/google/quota");
+            if (response.ok) {
+                const data = await response.json();
+                if (data.quota) {
+                    const quota: QuotaUsage = {
+                        charactersUsed: data.quota.charactersUsed,
+                        monthStart: data.quota.monthStart,
+                        lastReset: data.quota.lastReset || Date.now(),
+                    };
+                    setQuotaUsage(quota);
+                    setQuotaExceeded(quota.charactersUsed >= (data.limit || getGoogleLimit()));
+                    // Synchroniser avec le localStorage pour l'affichage
+                    saveQuotaUsage(quota);
+                }
+            }
+        } catch (error) {
+            console.error("Erreur lors du chargement du quota depuis le serveur:", error);
+            // Fallback vers le localStorage
+            const quota = loadQuotaUsage();
+            if (quota) {
+                setQuotaUsage(quota);
+                setQuotaExceeded(quota.charactersUsed >= getGoogleLimit());
+            }
+        }
+    }, [provider, getGoogleLimit, saveQuotaUsage, loadQuotaUsage]);
+
+    // Charger le quota au démarrage
+    useEffect(() => {
+        if (provider === "google") {
+            loadQuotaFromServer();
+        } else {
+            // Pour les autres providers, charger depuis localStorage si disponible
+            const quota = loadQuotaUsage();
+            if (quota) {
+                setQuotaUsage(quota);
+            }
+        }
+    }, [provider, loadQuotaFromServer, loadQuotaUsage]);
 
     // Charger les voix disponibles pour l'API native
     useEffect(() => {
@@ -215,48 +332,69 @@ export function useSpeechSynthesis(options: SpeechOptions = {}) {
         [azureKey, azureRegion, rate, pitch, speakNative]
     );
 
-    // Fonction pour utiliser Google Cloud TTS
+    // Fonction pour utiliser Google Cloud TTS via l'API route côté serveur
+    // IMPORTANT: La protection du quota se fait côté serveur pour éviter les contournements
     const speakGoogle = useCallback(
         async (text: string) => {
-            if (!googleApiKey) {
-                console.warn("Clé API Google non configurée, utilisation de l'API native");
-                speakNative(text);
-                return;
-            }
-
             try {
                 setIsSpeaking(true);
 
-                const response = await fetch(
-                    `https://texttospeech.googleapis.com/v1/text:synthesize?key=${googleApiKey}`,
-                    {
-                        method: "POST",
-                        headers: {
-                            "Content-Type": "application/json",
-                        },
-                        body: JSON.stringify({
-                            input: { text },
-                            voice: {
-                                languageCode: "fr-FR",
-                                name: "fr-FR-Neural2-C", // Voix neurale française
-                                ssmlGender: "FEMALE",
-                            },
-                            audioConfig: {
-                                audioEncoding: "MP3",
-                                speakingRate: rate,
-                                pitch: pitch,
-                                volumeGainDb: (volume - 1) * 6, // Convertir volume 0-1 en dB
-                            },
-                        }),
-                    }
-                );
+                // Appeler l'API route côté serveur qui gère le quota global
+                const response = await fetch("/api/tts/google", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                    },
+                    body: JSON.stringify({
+                        text,
+                        voiceType: googleVoiceType,
+                        rate,
+                        pitch,
+                        volume,
+                    }),
+                });
 
                 if (!response.ok) {
-                    throw new Error("Erreur lors de la synthèse vocale Google");
+                    const errorData = await response.json().catch(() => ({}));
+                    
+                    // Si le quota est dépassé, basculer vers l'API native
+                    if (response.status === 429 || errorData.error === "QUOTA_EXCEEDED") {
+                        console.warn(
+                            `🚫 Limite Google TTS atteinte côté serveur: ${errorData.message}. Basculement vers l'API native.`
+                        );
+                        // Mettre à jour le quota local pour l'affichage
+                        if (errorData.quota) {
+                            const currentMonth = getCurrentMonth();
+                            const quota: QuotaUsage = {
+                                charactersUsed: errorData.quota.charactersUsed,
+                                monthStart: errorData.quota.monthStart || currentMonth,
+                                lastReset: errorData.quota.lastReset || Date.now(),
+                            };
+                            saveQuotaUsage(quota);
+                            setQuotaUsage(quota);
+                            setQuotaExceeded(true);
+                        }
+                        speakNative(text);
+                        return;
+                    }
+
+                    throw new Error(`Erreur API TTS: ${errorData.message || "Erreur inconnue"}`);
                 }
 
                 const data = await response.json();
                 const audioData = data.audioContent;
+
+                // Mettre à jour le quota local avec les données du serveur
+                if (data.quota) {
+                    const quota: QuotaUsage = {
+                        charactersUsed: data.quota.charactersUsed,
+                        monthStart: data.quota.monthStart,
+                        lastReset: data.quota.lastReset || Date.now(),
+                    };
+                    saveQuotaUsage(quota);
+                    setQuotaUsage(quota);
+                    setQuotaExceeded(data.quota.charactersUsed >= (data.limit || getGoogleLimit()));
+                }
 
                 // Décoder l'audio base64
                 const audioBlob = new Blob(
@@ -285,7 +423,7 @@ export function useSpeechSynthesis(options: SpeechOptions = {}) {
                 speakNative(text);
             }
         },
-        [googleApiKey, rate, pitch, volume, speakNative]
+        [googleVoiceType, rate, pitch, volume, speakNative, getGoogleLimit, saveQuotaUsage, getCurrentMonth]
     );
 
     // Fonction principale de synthèse vocale
@@ -315,6 +453,15 @@ export function useSpeechSynthesis(options: SpeechOptions = {}) {
         setIsSpeaking(false);
     }, []);
 
+    // Fonction pour réinitialiser le quota (utile pour les tests)
+    const resetQuota = useCallback(() => {
+        if (typeof window !== "undefined") {
+            localStorage.removeItem(STORAGE_KEY);
+            setQuotaUsage(null);
+            setQuotaExceeded(false);
+        }
+    }, []);
+
     return {
         speak,
         stop,
@@ -322,6 +469,11 @@ export function useSpeechSynthesis(options: SpeechOptions = {}) {
         isAvailable,
         availableVoices,
         bestFrenchVoice: bestFrenchVoice?.name || null,
+        // Informations sur le quota Google
+        quotaUsage: provider === "google" ? quotaUsage : null,
+        quotaExceeded: provider === "google" ? quotaExceeded : false,
+        quotaLimit: provider === "google" ? getGoogleLimit() : null,
+        resetQuota: provider === "google" ? resetQuota : undefined,
     };
 }
 
