@@ -4,7 +4,17 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
-import { Sheet, SheetClose, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
+import {
+    Sheet,
+    SheetBody,
+    SheetClose,
+    SheetContent,
+    SheetDescription,
+    SheetFooter,
+    SheetHeader,
+    SheetTitle,
+    SheetTrigger,
+} from "@/components/ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { calculateCaloriesAcswWalking } from "@/lib/calculators/steps";
 import { useUserStore } from "@/stores/user-store";
@@ -396,7 +406,7 @@ export default function StepsPage() {
                                     <SheetDescription>Pour une précision maximale, marchez une distance connue et comptez vos pas.</SheetDescription>
                                 </SheetHeader>
 
-                                <div className="grid gap-6 py-6 px-4">
+                                <SheetBody className="grid gap-6 py-6">
                                     <div className="space-y-2">
                                         <Label>Distance réelle parcourue (m)</Label>
                                         <Input
@@ -422,7 +432,7 @@ export default function StepsPage() {
                                             <strong>{formatStride(parseFloat(calibDistanceStr) / parseFloat(calibStepsStr) || 0)}</strong>
                                         </div>
                                     )}
-                                </div>
+                                </SheetBody>
 
                                 <SheetFooter className="flex-col gap-2 sm:gap-0">
                                     <SheetClose asChild>

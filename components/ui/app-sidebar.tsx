@@ -1,6 +1,6 @@
 "use client";
 
-import { Apple, CircleGauge, CircleUser, Flame, Footprints, GlassWater, HeartPulse, SquareActivity } from "lucide-react";
+import { Apple, CircleGauge, CircleUser, Dumbbell, Flame, Footprints, GlassWater, HeartPulse, SquareActivity } from "lucide-react";
 
 import {
     Sidebar,
@@ -60,6 +60,11 @@ const data: NavItem[] = [
         title: "Cardio",
         url: "/cardio",
         icon: HeartPulse,
+    },
+    {
+        title: "Séances",
+        url: "/sessions",
+        icon: Dumbbell,
     },
 ];
 

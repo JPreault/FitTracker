@@ -1,5 +1,5 @@
 import { cn } from "@/lib/utils";
-import { Apple, CircleGauge, Flame, Footprints, GlassWater, HeartPulse, SquareActivity } from "lucide-react";
+import { Apple, CircleGauge, Dumbbell, Flame, Footprints, GlassWater, HeartPulse, SquareActivity } from "lucide-react";
 import Link from "next/link";
 
 const apps = [
@@ -50,6 +50,13 @@ const apps = [
         description: "Calculez vos zones d'intensité cardiaque pour optimiser votre entraînement.",
         url: "/cardio",
         icon: HeartPulse,
+        disabled: false,
+    },
+    {
+        title: "Séances",
+        description: "Créez et gérez vos séances de sport personnalisées avec des blocs et exercices.",
+        url: "/sessions",
+        icon: Dumbbell,
         disabled: false,
     },
 ];

@@ -2,7 +2,7 @@ import { ThemeProvider } from "@/components/theme-provider";
 import { ModeToggle } from "@/components/toggle-mode";
 import { AppSidebar } from "@/components/ui/app-sidebar";
 import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { Toaster } from "sonner";
 import "./globals.css";
@@ -35,7 +35,6 @@ export const metadata: Metadata = {
             name: "Alexandre Artisien",
         },
     ],
-    themeColor: "#34D399",
     generator: "Next.js",
     creator: "Alexandre Artisien",
     publisher: "Alexandre Artisien",
@@ -76,6 +75,10 @@ export const metadata: Metadata = {
             "max-snippet": -1,
         },
     },
+};
+
+export const viewport: Viewport = {
+    themeColor: "#34D399",
 };
 
 export default function RootLayout({
