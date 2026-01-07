@@ -802,7 +802,7 @@ Donner une estimation journalière de besoins hydriques, avec ajustements simple
 
 ---
 
-# G) Séances
+# G) Création des séances
 
 ## Objectif
 
@@ -850,6 +850,36 @@ Dans un bloc on peux ajouter des exos et changer leur ordre, ils sont définies 
 -   Afficher la liste des séances et le bouton pour ajouter des séances
 -   Bouton modifier pour les séances
 -   Formulaires intuitif pour ajouter des blocs et des exos
+
+---
+
+# H) Lancement des séances
+
+## Objectif
+
+Permettre à l'utilisateur de lancer les séances qu'il a créées. Cette partie doit permettre à l'utilisateur de sélectionner la séance qu'il souhaite de lancer. Il doit également pouvoir dire s'il veut la lancer depuis le début ou bien de puis un bloc précis et à une répétition précise, il doit aussi pouvoir préciser a partir de quelle exo il veut commencer.
+
+Au lancement de la séance, l'utilisateur doit pouvoir voir le bloc en cours, le nom du prochain bloc, les exos du bloc en cours, l'exo en cours, et le prochain exo.
+
+Si l'exo en cours est défini par une durée, l'utilisateur doit pouvoir voir le temps restant jusqu'à la fin de l'exo. Si l'exo en cours est défini par une répétition, l'utilisateur doit pouvoir voir le nombre de répétitions qu'il faut faire, il a également la possibilité d'indiquer qu'il a terminer l'exo pour passer au prochain.
+
+L'utilisateur doit pouvoir mettre en pause la séance a tout moment, et la reprendre par la suite ou l'abandonner.
+
+## UI minimum
+
+### Interface de sélection de séance
+
+-   Afficher la liste des séances et le bouton pour lancer une séance
+-   Pouvoir reprendre une séance que l'on a mis en pause
+-   Pouvoir effacer une séance de la liste des séances en pause
+
+### Interface de séance en cours
+
+-   Pouvoir mettre en pause la séance
+-   Afficher le bloc en cours, le nom du prochain bloc, les exos du bloc en cours, l'exo en cours, et le prochain exo.
+-   Si l'exo en cours est défini par une durée, l'utilisateur doit pouvoir voir le temps restant jusqu'à la fin de l'exo. Si l'exo en cours est défini par une répétition, l'utilisateur doit pouvoir voir le nombre de répétitions qu'il faut faire, il a également la possibilité d'indiquer qu'il a terminer l'exo pour passer au prochain.
+-   Lorsqu'on fait un décompte de temps, afficher un chronomètre mis a jour chaque seconde.
+-   Afficher le chrono également entre les exos en fonction du temps de pause défini, pareil pour le temps entre les blocs.
 
 ---
 

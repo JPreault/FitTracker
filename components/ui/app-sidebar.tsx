@@ -1,6 +1,6 @@
 "use client";
 
-import { Apple, CircleGauge, CircleUser, Dumbbell, Flame, Footprints, GlassWater, HeartPulse, SquareActivity } from "lucide-react";
+import { Apple, CircleGauge, CircleUser, Dumbbell, Flame, Footprints, GlassWater, HeartPulse, Play, SquareActivity } from "lucide-react";
 
 import {
     Sidebar,
@@ -66,6 +66,11 @@ const data: NavItem[] = [
         url: "/sessions",
         icon: Dumbbell,
     },
+    {
+        title: "Lancer une séance",
+        url: "/workout",
+        icon: Play,
+    },
 ];
 
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
@@ -111,7 +116,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                     <SidebarGroupContent>
                         <SidebarMenu className="gap-2">
                             {data.map((item) => {
-                                const isActive = pathname === item.url;
+                                const isActive = pathname === item.url || (item.url === "/workout" && pathname?.startsWith("/workout"));
                                 return (
                                     <SidebarMenuItem key={item.title}>
                                         <SidebarMenuButton
