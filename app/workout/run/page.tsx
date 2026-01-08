@@ -8,10 +8,8 @@ import { useWorkoutStore } from "@/stores/workout-store";
 import { Block, Exercise } from "@/types/session";
 import { Check, Pause, X } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-
-type WorkoutPhase = "exercise" | "between-exercises" | "between-blocks" | "completed";
 
 // Types pour la queue
 type QueueItemType = "exercise" | "pause-between-exercises" | "pause-between-repetitions" | "pause-between-blocks";
@@ -27,28 +25,96 @@ interface QueueItem {
     nextExercise?: Exercise;
 }
 
+// Composant pour la liste des blocs (réutilisable)
+interface BlocksListProps {
+    blocks: Block[];
+    currentBlockIndex: number;
+    phase: "exercise" | "between-exercises" | "between-blocks" | "completed";
+}
+
+const BlocksList = ({ blocks, currentBlockIndex, phase }: BlocksListProps) => {
+    return (
+        <Card>
+            <CardHeader>
+                <CardTitle>Blocs de la séance</CardTitle>
+            </CardHeader>
+            <CardContent>
+                <div className="flex gap-3 overflow-x-auto pb-2">
+                    {blocks.map((block, index) => (
+                        <div key={block.id} className="flex gap-3">
+                            <div
+                                className={cn(
+                                    "shrink-0 rounded-lg border p-4 min-w-[200px] transition-colors",
+                                    index === currentBlockIndex && phase !== "between-blocks"
+                                        ? "border-primary bg-primary/5"
+                                        : index < currentBlockIndex
+                                        ? "border-muted bg-muted/30 opacity-60"
+                                        : "border-muted bg-background"
+                                )}
+                            >
+                                <p className="font-medium mb-1">{block.name}</p>
+                                <p className="text-sm text-muted-foreground">
+                                    {block.repetitions} répétition{block.repetitions > 1 ? "s" : ""} • {block.exos.length} exercice
+                                    {block.exos.length > 1 ? "s" : ""}
+                                </p>
+                            </div>
+                            {/* Pause entre blocs (sauf après le dernier) */}
+                            {index < blocks.length - 1 && (
+                                <div
+                                    className={cn(
+                                        "shrink-0 rounded-lg border p-2 min-w-[70px] transition-colors flex flex-col items-center justify-center gap-1",
+                                        phase === "between-blocks" && currentBlockIndex === index + 1
+                                            ? "border-primary bg-primary/5"
+                                            : index < currentBlockIndex
+                                            ? "border-muted bg-muted/30 opacity-60"
+                                            : "border-muted bg-background"
+                                    )}
+                                >
+                                    <Pause className="size-4 text-muted-foreground" />
+                                    <p className="text-xs text-muted-foreground">{block.pauseBeforeNext}s</p>
+                                </div>
+                            )}
+                        </div>
+                    ))}
+                </div>
+            </CardContent>
+        </Card>
+    );
+};
+
 export default function WorkoutRunPage() {
     const { sessions } = useSessionStore();
     const { activeWorkout, pauseWorkout, abandonWorkout, updateWorkoutState } = useWorkoutStore();
     const router = useRouter();
 
     const [currentTime, setCurrentTime] = useState(0);
-    const [phase, setPhase] = useState<WorkoutPhase>("exercise");
+    // Index de l'action courante dans la queue (source de vérité unique)
+    const [currentQueueIndex, setCurrentQueueIndex] = useState<number>(0);
+    // Timer pour les pauses
     const [pauseTimer, setPauseTimer] = useState<number | null>(null);
     const [pauseInitialDuration, setPauseInitialDuration] = useState<number>(0);
+    // Timer automatique pour les exercices en répétitions (estimation: 2.5 secondes par répétition)
+    const [repsTimer, setRepsTimer] = useState<number | null>(null);
+    const [repsTimerStart, setRepsTimerStart] = useState<number | null>(null);
 
     // Référence pour suivre les annonces déjà faites (éviter les doublons)
     const lastAnnouncedKey = useRef<string>("");
     // Référence pour stocker le timeout en cours
     const currentTimeoutId = useRef<NodeJS.Timeout | null>(null);
+    // Référence pour stocker les timeouts actifs (pour ne pas les annuler prématurément)
+    const activeTimeouts = useRef<Map<string, NodeJS.Timeout>>(new Map());
+    // Référence pour éviter de logger la queue plusieurs fois
+    const hasLoggedQueue = useRef(false);
+    // Référence pour suivre l'intervalle de pause actif
+    const pauseIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
-    const session = activeWorkout ? sessions.find((s) => s.id === activeWorkout.sessionId) : null;
+    const session = useMemo(() => (activeWorkout ? sessions.find((s) => s.id === activeWorkout.sessionId) : null), [sessions, activeWorkout]);
 
-    // Générer la queue complète de la séance
-    const generateQueue = (): QueueItem[] => {
+    // Générer la queue complète de la séance (mémorisée)
+    const queue = useMemo((): QueueItem[] => {
         if (!session) return [];
 
-        const queue: QueueItem[] = [];
+        const queueItems: QueueItem[] = [];
 
         session.blocks.forEach((block, blockIndex) => {
             // Pour chaque répétition du bloc
@@ -56,7 +122,7 @@ export default function WorkoutRunPage() {
                 // Pour chaque exercice du bloc
                 block.exos.forEach((exercise, exerciseIndex) => {
                     // Ajouter l'exercice
-                    queue.push({
+                    queueItems.push({
                         type: "exercise",
                         exercise,
                         blockIndex,
@@ -67,7 +133,7 @@ export default function WorkoutRunPage() {
 
                     // Ajouter une pause entre exercices (sauf après le dernier exercice)
                     if (exerciseIndex < block.exos.length - 1) {
-                        queue.push({
+                        queueItems.push({
                             type: "pause-between-exercises",
                             pauseDuration: block.betweenExos,
                             blockIndex,
@@ -81,7 +147,7 @@ export default function WorkoutRunPage() {
 
                 // Ajouter une pause entre répétitions (sauf après la dernière répétition)
                 if (repetition < block.repetitions) {
-                    queue.push({
+                    queueItems.push({
                         type: "pause-between-repetitions",
                         pauseDuration: block.pause,
                         blockIndex,
@@ -96,7 +162,7 @@ export default function WorkoutRunPage() {
             // Ajouter une pause entre blocs (sauf après le dernier bloc)
             if (blockIndex < session.blocks.length - 1) {
                 const nextBlock = session.blocks[blockIndex + 1];
-                queue.push({
+                queueItems.push({
                     type: "pause-between-blocks",
                     pauseDuration: block.pauseBeforeNext,
                     blockIndex: blockIndex + 1,
@@ -108,162 +174,222 @@ export default function WorkoutRunPage() {
             }
         });
 
-        return queue;
-    };
+        return queueItems;
+    }, [session]);
 
-    const queue = generateQueue();
+    // Action courante basée sur l'index dans la queue (source de vérité unique)
+    const currentAction = useMemo(() => {
+        if (currentQueueIndex < 0 || currentQueueIndex >= queue.length) return null;
+        return queue[currentQueueIndex];
+    }, [queue, currentQueueIndex]);
 
-    // Log pour vérifier que la queue est bien générée
+    // Phase dérivée de l'action courante (pour compatibilité avec le code existant)
+    const phase = useMemo(() => {
+        if (!currentAction) return "completed";
+        if (currentAction.type === "exercise") return "exercise";
+        if (currentAction.type === "pause-between-blocks") return "between-blocks";
+        return "between-exercises";
+    }, [currentAction]);
+
+    // Log pour vérifier que la queue est bien générée (une seule fois au lancement)
     useEffect(() => {
-        console.log("Queue générée:", {
-            queueLength: queue.length,
-            session: !!session,
-            activeWorkout: !!activeWorkout,
-            firstItem: queue[0],
-        });
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [queue.length]);
-
-    // Trouver l'index actuel dans la queue basé sur l'état du workout
-    const getCurrentQueueIndex = (): number => {
-        if (!activeWorkout) {
-            console.log("getCurrentQueueIndex - pas d'activeWorkout");
-            return -1;
-        }
-
-        // Déterminer le type d'item actuel basé sur la phase
-        let targetType: QueueItemType = "exercise";
-        if (phase === "between-exercises") {
-            // Vérifier si c'est une pause entre répétitions ou entre exercices
-            if (activeWorkout.exerciseIndex === 0 && activeWorkout.blockRepetition > 1) {
-                targetType = "pause-between-repetitions";
-            } else {
-                targetType = "pause-between-exercises";
-            }
-        } else if (phase === "between-blocks") {
-            targetType = "pause-between-blocks";
-        }
-
-        const index = queue.findIndex(
-            (item) =>
-                item.blockIndex === activeWorkout.blockIndex &&
-                item.blockRepetition === activeWorkout.blockRepetition &&
-                item.exerciseIndex === activeWorkout.exerciseIndex &&
-                item.type === targetType
-        );
-
-        console.log("getCurrentQueueIndex:", {
-            blockIndex: activeWorkout.blockIndex,
-            blockRepetition: activeWorkout.blockRepetition,
-            exerciseIndex: activeWorkout.exerciseIndex,
-            phase,
-            targetType,
-            index,
-            queueLength: queue.length,
-            firstQueueItem: queue[0],
-        });
-
-        // Si l'index n'est pas trouvé, afficher les premiers éléments de la queue pour déboguer
-        if (index === -1 && queue.length > 0) {
-            console.log(
-                "Index non trouvé. Premiers éléments de la queue:",
-                queue.slice(0, 3).map((item) => ({
+        if (queue.length > 0 && session && activeWorkout && !hasLoggedQueue.current) {
+            console.log("═══════════════════════════════════════════════════════");
+            console.log("🚀 LANCEMENT DE LA SÉANCE - QUEUE TOTALE");
+            console.log("═══════════════════════════════════════════════════════");
+            console.log("📋 Session:", session.name);
+            console.log("📊 Nombre total d'éléments dans la queue:", queue.length);
+            console.log("📝 Queue complète:");
+            queue.forEach((item, index) => {
+                const itemInfo: Record<string, string | number> = {
+                    index,
                     type: item.type,
                     blockIndex: item.blockIndex,
                     blockRepetition: item.blockRepetition,
                     exerciseIndex: item.exerciseIndex,
-                }))
-            );
+                };
+                if (item.type === "exercise" && item.exercise) {
+                    itemInfo.exerciseName = item.exercise.name;
+                    itemInfo.exerciseType = item.exercise.type;
+                    itemInfo.exerciseValue = item.exercise.value;
+                }
+                if (item.pauseDuration) {
+                    itemInfo.pauseDuration = item.pauseDuration;
+                }
+                if (item.nextExercise) {
+                    itemInfo.nextExerciseName = item.nextExercise.name;
+                }
+                console.log(`  [${index}]`, itemInfo);
+            });
+            console.log("═══════════════════════════════════════════════════════");
+            hasLoggedQueue.current = true;
+        }
+    }, [queue, session, activeWorkout]);
+
+    // Initialiser currentQueueIndex au démarrage et le réinitialiser si la session change
+    const queueInitialized = useRef<string | null>(null);
+    useEffect(() => {
+        if (!activeWorkout || !session || queue.length === 0) {
+            // Réinitialiser si pas de workout actif
+            if (queueInitialized.current !== null) {
+                queueInitialized.current = null;
+                setCurrentQueueIndex(0);
+                lastAnnouncedKey.current = "";
+            }
+            return;
         }
 
-        return index;
-    };
+        const sessionKey = `${activeWorkout.sessionId}-${activeWorkout.blockIndex}-${activeWorkout.blockRepetition}-${activeWorkout.exerciseIndex}`;
+
+        // Si c'est une nouvelle session ou un nouvel état, réinitialiser
+        // MAIS seulement si on est sur un exercice, pas sur une pause
+        // Cela évite de sauter les pauses quand moveToNextAction() est appelé
+        if (queueInitialized.current !== sessionKey) {
+            // Trouver l'index correspondant à l'état actuel du workout
+            // On cherche uniquement les exercices pour éviter de sauter les pauses
+            const targetIndex = queue.findIndex(
+                (item) =>
+                    item.blockIndex === activeWorkout.blockIndex &&
+                    item.blockRepetition === activeWorkout.blockRepetition &&
+                    item.exerciseIndex === activeWorkout.exerciseIndex &&
+                    item.type === "exercise"
+            );
+
+            if (targetIndex >= 0) {
+                console.log("🔄 Initialisation de currentQueueIndex:", {
+                    ancien: currentQueueIndex,
+                    nouveau: targetIndex,
+                    sessionKey,
+                    raison: "Synchronisation avec activeWorkout (exercice trouvé)",
+                });
+                setCurrentQueueIndex(targetIndex);
+                queueInitialized.current = sessionKey;
+                // Réinitialiser la clé d'annonce pour permettre l'annonce
+                lastAnnouncedKey.current = "";
+            } else {
+                // Si on ne trouve pas d'index correspondant, ne PAS changer l'index
+                // Cela peut arriver si on est sur une pause (activeWorkout n'est pas mis à jour pour les pauses)
+                console.log("⚠️ Index non trouvé pour sessionKey:", sessionKey, "- Conservation de l'index actuel:", currentQueueIndex);
+                // Ne pas changer currentQueueIndex si on ne trouve pas d'exercice correspondant
+                // Cela permet de rester sur la pause en cours
+                queueInitialized.current = sessionKey;
+            }
+        }
+    }, [activeWorkout, session, queue, currentQueueIndex]);
 
     // Calculer l'index et l'item dans le useEffect pour éviter les problèmes de timing
     // const currentQueueIndex = getCurrentQueueIndex();
     // const currentQueueItem = currentQueueIndex >= 0 ? queue[currentQueueIndex] : null;
 
-    // Calculer la position actuelle dans la séance
-    const getCurrentBlock = (): Block | null => {
-        if (!session || !activeWorkout) return null;
-        return session.blocks[activeWorkout.blockIndex] || null;
-    };
+    // Calculer la position actuelle dans la séance basée sur l'action courante (mémorisé)
+    const currentBlock = useMemo((): Block | null => {
+        if (!session || !currentAction) return null;
+        return session.blocks[currentAction.blockIndex] || null;
+    }, [session, currentAction]);
 
-    const getCurrentExercise = (): Exercise | null => {
-        const block = getCurrentBlock();
-        if (!block || !activeWorkout) return null;
-        return block.exos[activeWorkout.exerciseIndex] || null;
-    };
+    const currentExercise = useMemo((): Exercise | null => {
+        if (!currentAction) return null;
+        // Pour les exercices, utiliser l'exercice de l'action
+        if (currentAction.type === "exercise" && currentAction.exercise) {
+            return currentAction.exercise;
+        }
+        // Pour les pauses, utiliser nextExercise
+        if (currentAction.nextExercise) {
+            return currentAction.nextExercise;
+        }
+        // Sinon, chercher dans le bloc
+        if (currentBlock) {
+            return currentBlock.exos[currentAction.exerciseIndex] || null;
+        }
+        return null;
+    }, [currentAction, currentBlock]);
 
-    const getNextBlock = (): Block | null => {
-        if (!session || !activeWorkout) return null;
-        const nextIndex = activeWorkout.blockIndex + 1;
+    const nextBlock = useMemo((): Block | null => {
+        if (!session || !currentAction) return null;
+        const nextIndex = currentAction.blockIndex + 1;
         return session.blocks[nextIndex] || null;
-    };
+    }, [session, currentAction]);
 
-    // Navigation automatique
-    const moveToNextExercise = () => {
-        if (!session || !activeWorkout) return;
+    // Navigation vers l'action suivante dans la queue (simplifiée)
+    const moveToNextAction = useCallback(() => {
+        if (currentQueueIndex >= queue.length - 1) {
+            // Séance terminée
+            console.log("✅ SÉANCE TERMINÉE");
+            toast.success("Séance terminée !");
+            return;
+        }
 
-        const block = getCurrentBlock();
-        if (!block) return;
+        console.log("➡️  NAVIGATION - Passage à l'action suivante");
+        console.log("   Index actuel:", currentQueueIndex);
+        console.log("   Action actuelle:", currentAction?.type);
 
-        const nextExerciseIndex = activeWorkout.exerciseIndex + 1;
+        // Passer à l'action suivante dans la queue
+        const nextIndex = currentQueueIndex + 1;
+        console.log("   🔄 Changement d'index:", currentQueueIndex, "→", nextIndex);
+        setCurrentQueueIndex(nextIndex);
 
-        // Si on a fini tous les exos du bloc
-        if (nextExerciseIndex >= block.exos.length) {
-            // Vérifier si on a fini toutes les répétitions du bloc
-            if (activeWorkout.blockRepetition >= block.repetitions) {
-                // Passer au bloc suivant
-                const nextBlockIndex = activeWorkout.blockIndex + 1;
-                if (nextBlockIndex >= session.blocks.length) {
-                    // Séance terminée
-                    setPhase("completed");
-                    toast.success("Séance terminée !");
-                    return;
-                }
-                // Pause entre blocs
-                setPhase("between-blocks");
-                setPauseTimer(block.pauseBeforeNext);
-                setPauseInitialDuration(block.pauseBeforeNext);
+        // Réinitialiser les timers
+        setRepsTimer(null);
+        setRepsTimerStart(null);
+
+        const nextAction = queue[nextIndex];
+        if (nextAction) {
+            // Ne synchroniser activeWorkout QUE pour les exercices, pas pour les pauses
+            // Cela évite que le useEffect d'initialisation saute les pauses
+            if (nextAction.type === "exercise") {
                 updateWorkoutState({
-                    blockIndex: nextBlockIndex,
-                    blockRepetition: 1,
-                    exerciseIndex: 0,
-                    currentTimer: null,
-                    timerStartTime: null,
-                });
-            } else {
-                // Nouvelle répétition du bloc
-                setPhase("between-exercises");
-                setPauseTimer(block.pause);
-                setPauseInitialDuration(block.pause);
-                updateWorkoutState({
-                    blockRepetition: activeWorkout.blockRepetition + 1,
-                    exerciseIndex: 0,
+                    blockIndex: nextAction.blockIndex,
+                    blockRepetition: nextAction.blockRepetition,
+                    exerciseIndex: nextAction.exerciseIndex,
                     currentTimer: null,
                     timerStartTime: null,
                 });
             }
-        } else {
-            // Passer à l'exo suivant dans le bloc
-            setPhase("between-exercises");
-            setPauseTimer(block.betweenExos);
-            setPauseInitialDuration(block.betweenExos);
-            updateWorkoutState({
-                exerciseIndex: nextExerciseIndex,
-                currentTimer: null,
-                timerStartTime: null,
-            });
+            // Pour les pauses, on ne met PAS à jour activeWorkout pour éviter que le useEffect d'initialisation saute la pause
+
+            // Réinitialiser le timer de pause si on passe à un exercice
+            if (nextAction.type === "exercise") {
+                setPauseTimer(null);
+                setPauseInitialDuration(0);
+                // Si c'est un exercice avec durée, initialiser le timer
+                if (nextAction.exercise?.type === "duration") {
+                    const now = Date.now();
+                    updateWorkoutState({
+                        currentTimer: nextAction.exercise.value,
+                        timerStartTime: now,
+                    });
+                }
+            } else {
+                // C'est une pause - réinitialiser le timer pour forcer l'initialisation dans le useEffect
+                setPauseTimer(null);
+                setPauseInitialDuration(0);
+            }
+
+            console.log("   Index suivant:", nextIndex);
+            console.log("   Action suivante:", nextAction.type);
+        } else if (nextIndex >= queue.length) {
+            // Séance terminée
+            console.log("✅ SÉANCE TERMINÉE");
+            toast.success("Séance terminée !");
         }
-    };
+    }, [currentQueueIndex, queue, currentAction, updateWorkoutState]);
+
+    // DÉSACTIVÉ: Gestion du timer automatique pour les exercices en répétitions
+    // L'utilisateur doit maintenant compléter manuellement les exercices en répétitions
+    // useEffect(() => {
+    //     ... code désactivé ...
+    // }, [activeWorkout, currentAction, activeWorkout?.isPaused, repsTimerStart, moveToNextAction]);
 
     // Gestion du timer pour les exos avec durée
     useEffect(() => {
-        if (!activeWorkout || phase !== "exercise" || activeWorkout.isPaused) return;
+        if (!activeWorkout || !currentAction || currentAction.type !== "exercise" || activeWorkout.isPaused) return;
 
-        const exercise = getCurrentExercise();
+        const exercise = currentAction.exercise;
         if (!exercise || exercise.type !== "duration") return;
+
+        // Réinitialiser le timer des reps si on passe à un exercice en durée
+        setRepsTimer(null);
+        setRepsTimerStart(null);
 
         // Initialiser le timer si nécessaire
         if (activeWorkout.currentTimer === null && activeWorkout.timerStartTime === null) {
@@ -282,12 +408,9 @@ export default function WorkoutRunPage() {
             const currentState = useWorkoutStore.getState().activeWorkout;
             if (!currentState || currentState.isPaused || !currentState.timerStartTime) return;
 
-            // Récupérer l'exercice actuel depuis le store
-            const currentSessions = useSessionStore.getState().sessions;
-            const currentSession = currentSessions.find((s) => s.id === currentState.sessionId);
-            const currentBlock = currentSession?.blocks[currentState.blockIndex];
-            const currentExercise = currentBlock?.exos[currentState.exerciseIndex];
-
+            // Récupérer l'exercice actuel depuis l'action courante
+            // Note: On utilise currentAction depuis la closure, mais on doit vérifier qu'il est toujours valide
+            const currentExercise = currentAction?.exercise;
             if (!currentExercise || currentExercise.type !== "duration") return;
 
             const now = Date.now();
@@ -298,7 +421,7 @@ export default function WorkoutRunPage() {
 
             if (remaining <= 0) {
                 clearInterval(interval);
-                moveToNextExercise();
+                moveToNextAction();
                 return;
             }
 
@@ -308,98 +431,160 @@ export default function WorkoutRunPage() {
         }, 1000);
 
         return () => clearInterval(interval);
-        /* eslint-disable-next-line react-hooks/exhaustive-deps */
-    }, [activeWorkout?.blockIndex, activeWorkout?.exerciseIndex, activeWorkout?.isPaused, phase, moveToNextExercise, updateWorkoutState]);
+    }, [activeWorkout, currentAction, moveToNextAction, updateWorkoutState, currentQueueIndex]);
 
     // Gestion des pauses entre exos/blocs
     useEffect(() => {
-        if (phase !== "between-exercises" && phase !== "between-blocks") {
-            setPauseTimer(null);
-            setPauseInitialDuration(0);
+        // Nettoyer l'intervalle précédent s'il existe
+        if (pauseIntervalRef.current) {
+            clearInterval(pauseIntervalRef.current);
+            pauseIntervalRef.current = null;
+        }
+
+        if (!currentAction) {
             return;
         }
 
-        if (pauseTimer === null || pauseTimer <= 0) {
-            // Fin de la pause, passer à l'exo suivant
-            if (phase === "between-exercises" || phase === "between-blocks") {
-                setPhase("exercise");
-                const exercise = getCurrentExercise();
-                if (exercise && exercise.type === "duration") {
-                    const now = Date.now();
-                    updateWorkoutState({
-                        currentTimer: exercise.value,
-                        timerStartTime: now,
-                    });
-                }
+        // Si on est sur un exercice, réinitialiser le timer de pause
+        if (currentAction.type === "exercise") {
+            if (pauseTimer !== null) {
+                setPauseTimer(null);
+                setPauseInitialDuration(0);
             }
             return;
         }
 
-        if (activeWorkout?.isPaused) return;
+        // C'est une pause - s'assurer que le timer est initialisé
+        if (!currentAction.pauseDuration) {
+            console.warn("⚠️  Pause sans durée définie, type:", currentAction.type);
+            return;
+        }
 
-        const interval = setInterval(() => {
+        console.log("⏸️  DÉTECTION PAUSE - Type:", currentAction.type, "Durée:", currentAction.pauseDuration, "Timer actuel:", pauseTimer);
+
+        // Initialiser le timer si nécessaire
+        if (pauseTimer === null) {
+            console.log("⏸️  ✅ Initialisation du timer de pause:", currentAction.pauseDuration, "secondes");
+            setPauseTimer(currentAction.pauseDuration);
+            setPauseInitialDuration(currentAction.pauseDuration);
+            // Ne pas démarrer le countdown immédiatement - attendre le prochain render
+            return;
+        }
+
+        // Si le workout est en pause, ne pas décrémenter le timer
+        if (activeWorkout?.isPaused) {
+            console.log("⏸️  Workout en pause, timer bloqué à:", pauseTimer);
+            return;
+        }
+
+        // Démarrer le countdown seulement si le timer est > 0
+        if (pauseTimer <= 0) {
+            console.log("✅ Pause terminée, passage à l'action suivante dans 1000ms");
+            // Laisser un délai pour que l'annonce de pause se termine
+            setTimeout(() => {
+                moveToNextAction();
+            }, 1000);
+            return;
+        }
+
+        // Timer countdown - décrémenter chaque seconde
+        console.log("⏸️  Démarrage du countdown de pause, timer:", pauseTimer);
+        pauseIntervalRef.current = setInterval(() => {
             setPauseTimer((prev) => {
-                if (prev === null || prev <= 1) {
-                    // Fin de la pause
-                    setTimeout(() => {
-                        setPhase("exercise");
-                        const exercise = getCurrentExercise();
-                        if (exercise && exercise.type === "duration") {
-                            const now = Date.now();
-                            updateWorkoutState({
-                                currentTimer: exercise.value,
-                                timerStartTime: now,
-                            });
-                        }
-                    }, 0);
+                if (prev === null || prev <= 0) {
+                    if (pauseIntervalRef.current) {
+                        clearInterval(pauseIntervalRef.current);
+                        pauseIntervalRef.current = null;
+                    }
                     return null;
                 }
-                return prev - 1;
+
+                const newValue = prev - 1;
+                console.log("⏸️  Countdown pause:", newValue, "secondes restantes");
+
+                if (newValue <= 0) {
+                    // Fin de la pause
+                    console.log("⏸️  ✅ Timer de pause atteint 0, passage à l'action suivante dans 1000ms");
+                    if (pauseIntervalRef.current) {
+                        clearInterval(pauseIntervalRef.current);
+                        pauseIntervalRef.current = null;
+                    }
+                    setTimeout(() => {
+                        moveToNextAction();
+                    }, 1000);
+                    return 0;
+                }
+
+                return newValue;
             });
         }, 1000);
 
-        return () => clearInterval(interval);
-        /* eslint-disable-next-line react-hooks/exhaustive-deps */
-    }, [phase, pauseTimer, activeWorkout?.isPaused, updateWorkoutState]);
+        return () => {
+            if (pauseIntervalRef.current) {
+                clearInterval(pauseIntervalRef.current);
+                pauseIntervalRef.current = null;
+            }
+        };
+    }, [currentAction, pauseTimer, activeWorkout?.isPaused, moveToNextAction]);
 
     // Timer global de la séance
     useEffect(() => {
-        if (!activeWorkout || activeWorkout.isPaused) return;
+        if (!activeWorkout || activeWorkout.isPaused || !activeWorkout.startedAt) return;
 
+        const startTime = activeWorkout.startedAt;
         const interval = setInterval(() => {
-            if (activeWorkout.startedAt) {
-                const elapsed = Math.floor((Date.now() - activeWorkout.startedAt) / 1000);
-                setCurrentTime(elapsed);
-            }
+            const elapsed = Math.floor((Date.now() - startTime) / 1000);
+            setCurrentTime(elapsed);
         }, 1000);
 
         return () => clearInterval(interval);
     }, [activeWorkout]);
 
-    const handleCompleteExercise = () => {
-        moveToNextExercise();
-    };
+    const handleCompleteExercise = useCallback(() => {
+        // Réinitialiser le timer des reps si présent
+        if (repsTimer !== null || repsTimerStart !== null) {
+            setRepsTimer(null);
+            setRepsTimerStart(null);
+        }
+        moveToNextAction();
+    }, [moveToNextAction, repsTimer, repsTimerStart]);
 
-    const handlePause = () => {
+    // Détection de la touche Espace pour terminer rapidement les exercices
+    useEffect(() => {
+        if (!currentAction || currentAction.type !== "exercise" || activeWorkout?.isPaused) return;
+
+        const handleKeyPress = (event: KeyboardEvent) => {
+            // Espace pour terminer l'exercice
+            if (event.code === "Space" && !event.repeat) {
+                event.preventDefault();
+                handleCompleteExercise();
+            }
+        };
+
+        window.addEventListener("keydown", handleKeyPress);
+        return () => window.removeEventListener("keydown", handleKeyPress);
+    }, [currentAction, activeWorkout?.isPaused, handleCompleteExercise]);
+
+    const handlePause = useCallback(() => {
         pauseWorkout();
         toast.info("Séance mise en pause");
         router.push("/workout");
-    };
+    }, [pauseWorkout, router]);
 
-    const handleAbandon = () => {
+    const handleAbandon = useCallback(() => {
         abandonWorkout();
         router.push("/workout");
         toast.info("Séance abandonnée");
-    };
+    }, [abandonWorkout, router]);
 
-    const formatTime = (seconds: number): string => {
+    const formatTime = useCallback((seconds: number): string => {
         const mins = Math.floor(seconds / 60);
         const secs = seconds % 60;
         return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
-    };
+    }, []);
 
-    // Fonction générique pour prononcer du texte
-    const speak = (text: string) => {
+    // Fonction générique pour prononcer du texte (mémorisée)
+    const speak = useCallback((text: string) => {
         if (typeof window === "undefined" || !("speechSynthesis" in window)) {
             return; // L'API n'est pas disponible
         }
@@ -417,167 +602,250 @@ export default function WorkoutRunPage() {
 
             window.speechSynthesis.speak(utterance);
         }, 100);
-    };
+    }, []);
 
-    // Prononcer l'instruction pour un exercice
-    const speakExerciseInstruction = (exercise: Exercise) => {
-        if (exercise.type === "duration") {
-            const memberText = exercise.member ? ` par ${exercise.member}` : "";
-            const text = `Faire ${exercise.name} pendant ${exercise.value} seconde${exercise.value > 1 ? "s" : ""}${memberText}`;
-            speak(text);
-        } else {
-            const memberText = exercise.member ? ` par ${exercise.member}` : "";
-            const text = `Faire ${exercise.name} ${exercise.value} fois${memberText}, puis valider l'exécution de l'exercice`;
-            speak(text);
-        }
-    };
+    // Prononcer l'instruction pour un exercice (mémorisée)
+    const speakExerciseInstruction = useCallback(
+        (exercise: Exercise) => {
+            if (exercise.type === "duration") {
+                const memberText = exercise.member ? ` par ${exercise.member}` : "";
+                const text = `Faire ${exercise.name} pendant ${exercise.value} seconde${exercise.value > 1 ? "s" : ""}${memberText}`;
+                speak(text);
+            } else {
+                const memberText = exercise.member ? ` par ${exercise.member}` : "";
+                const text = `Faire ${exercise.name} ${exercise.value} fois${memberText}, puis valider l'exécution de l'exercice`;
+                speak(text);
+            }
+        },
+        [speak]
+    );
 
-    // Prononcer l'annonce de pause entre exercices
-    const speakPauseBetweenExercises = (pauseDuration: number, nextExercise: Exercise | null) => {
-        if (nextExercise) {
-            const text = `Pause de ${pauseDuration} seconde${pauseDuration > 1 ? "s" : ""} avant de passer à l'exercice ${
-                nextExercise.name
-            }. Préparer vous.`;
-            speak(text);
-        }
-    };
+    // Prononcer l'annonce de pause entre exercices (mémorisée)
+    const speakPauseBetweenExercises = useCallback(
+        (pauseDuration: number, nextExercise: Exercise | null) => {
+            if (nextExercise) {
+                const text = `Pause de ${pauseDuration} seconde${pauseDuration > 1 ? "s" : ""} avant de passer à l'exercice ${
+                    nextExercise.name
+                }. Préparer vous.`;
+                speak(text);
+            }
+        },
+        [speak]
+    );
 
-    // Prononcer l'annonce de fin de séance
-    const speakWorkoutCompleted = () => {
+    // Prononcer l'annonce de fin de séance (mémorisée)
+    const speakWorkoutCompleted = useCallback(() => {
         const text = "Bravo pour cette superbe séance, on se retrouve plus tard !";
         speak(text);
-    };
+    }, [speak]);
 
-    // Prononcer l'annonce de pause entre répétitions
-    const speakPauseBetweenRepetitions = (pauseDuration: number, nextRepetition: number, totalRepetitions: number, firstExercise: Exercise) => {
-        const text = `Bravo, pause de ${pauseDuration} seconde${
-            pauseDuration > 1 ? "s" : ""
-        } puis nous passerons à la répétition ${nextRepetition} sur ${totalRepetitions} qui commencera par l'exercice ${firstExercise.name}`;
-        speak(text);
-    };
+    // Prononcer l'annonce de pause entre répétitions (mémorisée)
+    const speakPauseBetweenRepetitions = useCallback(
+        (pauseDuration: number, nextRepetition: number, totalRepetitions: number, firstExercise: Exercise) => {
+            const text = `Bravo, pause de ${pauseDuration} seconde${
+                pauseDuration > 1 ? "s" : ""
+            } puis nous passerons à la répétition ${nextRepetition} sur ${totalRepetitions} qui commencera par l'exercice ${firstExercise.name}`;
+            speak(text);
+        },
+        [speak]
+    );
 
-    // Prononcer l'annonce de pause entre blocs
-    const speakPauseBetweenBlocks = (pauseDuration: number, nextBlock: Block, firstExercise: Exercise) => {
-        const text = `Super bloc, pause de ${pauseDuration} seconde${pauseDuration > 1 ? "s" : ""} puis nous passerons au bloc suivant ${
-            nextBlock.name
-        } qui commencera par l'exercice ${firstExercise.name}`;
-        speak(text);
-    };
+    // Prononcer l'annonce de pause entre blocs (mémorisée)
+    const speakPauseBetweenBlocks = useCallback(
+        (pauseDuration: number, nextBlock: Block, firstExercise: Exercise) => {
+            const text = `Super bloc, pause de ${pauseDuration} seconde${pauseDuration > 1 ? "s" : ""} puis nous passerons au bloc suivant ${
+                nextBlock.name
+            } qui commencera par l'exercice ${firstExercise.name}`;
+            speak(text);
+        },
+        [speak]
+    );
 
-    // Un seul useEffect pour gérer toutes les annonces vocales via la queue
+    // Gestion des annonces vocales basée sur l'action courante dans la queue
     useEffect(() => {
-        console.log("useEffect annonce - DÉBUT", {
-            activeWorkout: !!activeWorkout,
-            session: !!session,
-            isPaused: activeWorkout?.isPaused,
-            queueLength: queue.length,
-            phase,
-        });
-
         if (!activeWorkout || !session || activeWorkout.isPaused) {
-            console.log("useEffect annonce - conditions non remplies");
-            return;
-        }
-
-        // Calculer l'index et l'item directement dans le useEffect pour éviter les problèmes de timing
-        const queueIndex = getCurrentQueueIndex();
-        const queueItem = queueIndex >= 0 ? queue[queueIndex] : null;
-
-        if (queueIndex < 0 || !queueItem) {
-            console.log("useEffect annonce - index ou item invalide:", {
-                queueIndex,
-                queueItem: !!queueItem,
-                queueLength: queue.length,
+            console.log("🔇 Annonce bloquée:", {
+                activeWorkout: !!activeWorkout,
+                session: !!session,
+                isPaused: activeWorkout?.isPaused,
             });
             return;
         }
 
-        // Créer une clé unique pour cet élément de la queue
-        const queueKey = `${queueItem.type}-${queueItem.blockIndex}-${queueItem.exerciseIndex}-${queueItem.blockRepetition}`;
+        if (!currentAction) {
+            console.log("🔇 Pas d'action courante:", {
+                currentQueueIndex,
+                queueLength: queue.length,
+                queueValide: queue.length > 0,
+                indexValide: currentQueueIndex >= 0 && currentQueueIndex < queue.length,
+            });
+            return;
+        }
 
-        console.log("useEffect annonce - vérification:", {
-            queueKey,
+        // Créer une clé unique pour cette action
+        const actionKey = `${currentAction.type}-${currentAction.blockIndex}-${currentAction.exerciseIndex}-${currentAction.blockRepetition}-${currentQueueIndex}`;
+
+        console.log("🔍 Vérification annonce:", {
+            actionKey,
             lastAnnouncedKey: lastAnnouncedKey.current,
-            queueIndex,
-            type: queueItem.type,
+            currentQueueIndex,
+            actionType: currentAction.type,
+            doitAnnoncer: actionKey !== lastAnnouncedKey.current,
+            exercise: currentAction.exercise?.name || "N/A",
         });
 
-        // Ne déclencher l'annonce qu'une seule fois pour cet élément
-        if (queueKey !== lastAnnouncedKey.current) {
-            // Annuler le timeout précédent s'il existe et qu'il est pour un autre élément
-            if (currentTimeoutId.current) {
-                console.log("Annulation du timeout précédent");
-                clearTimeout(currentTimeoutId.current);
-                currentTimeoutId.current = null;
-            }
-
-            // Délai plus long pour le premier exercice (index 0) pour s'assurer que tout est prêt au premier rendu
-            const isFirstExercise = queueIndex === 0 && queueItem.type === "exercise";
-            const baseDelay = queueItem.type === "exercise" && queueItem.exercise?.type === "duration" ? 800 : 600;
-            const delay = isFirstExercise ? Math.max(baseDelay, 1200) : baseDelay;
-
-            console.log("useEffect annonce - déclenchement:", {
-                queueKey,
-                isFirstExercise,
-                delay,
-                type: queueItem.type,
+        // Logger les changements d'étape
+        if (actionKey !== lastAnnouncedKey.current) {
+            console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            console.log("🔄 CHANGEMENT D'ACTION");
+            console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            console.log("📍 Position dans la queue:", `${currentQueueIndex + 1}/${queue.length}`);
+            console.log("🎯 Type d'action:", currentAction.type);
+            console.log("📦 Bloc:", {
+                index: currentAction.blockIndex,
+                name: currentAction.block?.name || "N/A",
+                repetition: `${currentAction.blockRepetition}/${currentAction.block?.repetitions || "N/A"}`,
             });
+            console.log("💪 Exercice:", {
+                index: currentAction.exerciseIndex,
+                name: currentAction.exercise?.name || currentAction.nextExercise?.name || "N/A",
+                type: currentAction.exercise?.type || currentAction.nextExercise?.type || "N/A",
+                value: currentAction.exercise?.value || currentAction.nextExercise?.value || "N/A",
+            });
+            if (currentAction.pauseDuration) {
+                console.log("⏸️  Pause:", {
+                    durée: `${currentAction.pauseDuration}s`,
+                    type: currentAction.type,
+                });
+            }
+            console.log("🔑 Clé unique:", actionKey);
+            console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        }
 
-            // Mettre à jour la clé immédiatement pour éviter les doublons lors des re-renders
-            lastAnnouncedKey.current = queueKey;
+        // Ne déclencher l'annonce qu'une seule fois pour cette action
+        if (actionKey !== lastAnnouncedKey.current) {
+            console.log("✅ Nouvelle action détectée, préparation de l'annonce");
+            // Ne PAS annuler le timeout précédent - laisser l'annonce se terminer même si l'action change
+            // Cela garantit que toutes les annonces sont prononcées
+            // Les timeouts se nettoieront automatiquement après exécution
+
+            // Délai plus long pour le premier exercice (index 0)
+            const isFirstExercise = currentQueueIndex === 0 && currentAction.type === "exercise";
+            // Délai supplémentaire après une pause pour éviter les conflits
+            const wasPause = lastAnnouncedKey.current.includes("pause");
+            // Délais différents selon le type d'action
+            // Augmenter les délais pour éviter que le début des phrases soit coupé
+            let baseDelay: number;
+            if (currentAction.type === "exercise") {
+                baseDelay = currentAction.exercise?.type === "duration" ? 1000 : 800;
+            } else {
+                // Pour les pauses, délai plus long pour laisser le temps à l'annonce de se terminer
+                baseDelay = 1000;
+            }
+            const delay = isFirstExercise
+                ? Math.max(baseDelay, 1500)
+                : wasPause && currentAction.type === "exercise"
+                ? Math.max(baseDelay, 1500) // Délai supplémentaire après pause
+                : baseDelay;
+
+            // Mettre à jour la clé immédiatement pour éviter les doublons
+            lastAnnouncedKey.current = actionKey;
+            console.log("   ⏱️  Programmation de l'annonce avec délai:", delay, "ms");
+
+            // Capturer les valeurs nécessaires pour éviter les problèmes de closure
+            const actionToAnnounce = currentAction;
+            const actionType = currentAction.type;
 
             const timeoutId = setTimeout(() => {
-                console.log("Timeout exécuté - prononciation:", queueKey);
-                currentTimeoutId.current = null; // Réinitialiser le ref après exécution
-                switch (queueItem.type) {
+                // Vérifier que le timeout est toujours dans la map des timeouts actifs
+                // (cela signifie qu'il n'a pas été explicitement annulé)
+                if (!activeTimeouts.current.has(actionKey) || activeTimeouts.current.get(actionKey) !== timeoutId) {
+                    console.log("   ⏹️  Timeout annulé avant exécution pour:", actionType, "(actionKey:", actionKey, ")");
+                    return;
+                }
+
+                // Nettoyer après exécution
+                currentTimeoutId.current = null;
+                activeTimeouts.current.delete(actionKey);
+
+                // Vérifier que l'action est toujours valide
+                if (!actionToAnnounce) {
+                    console.error("❌ ERREUR: actionToAnnounce est null au moment de l'annonce!");
+                    return;
+                }
+
+                console.log("🔊 Annonce vocale déclenchée pour:", actionType);
+                console.log("   Détails:", {
+                    actionKey,
+                    exercise: actionToAnnounce.exercise?.name,
+                    pauseDuration: actionToAnnounce.pauseDuration,
+                });
+
+                switch (actionType) {
                     case "exercise":
-                        if (queueItem.exercise) {
-                            console.log("Prononciation exercice:", queueItem.exercise.name);
-                            speakExerciseInstruction(queueItem.exercise);
+                        if (actionToAnnounce.exercise) {
+                            console.log("   ✅ Prononciation de l'exercice:", actionToAnnounce.exercise.name);
+                            speakExerciseInstruction(actionToAnnounce.exercise);
+                        } else {
+                            console.warn("   ⚠️ Exercice manquant dans l'action");
                         }
                         break;
                     case "pause-between-exercises":
-                        if (queueItem.pauseDuration && queueItem.nextExercise) {
-                            speakPauseBetweenExercises(queueItem.pauseDuration, queueItem.nextExercise);
+                        if (actionToAnnounce.pauseDuration && actionToAnnounce.nextExercise) {
+                            speakPauseBetweenExercises(actionToAnnounce.pauseDuration, actionToAnnounce.nextExercise);
                         }
                         break;
                     case "pause-between-repetitions":
-                        if (queueItem.pauseDuration && queueItem.block && queueItem.nextExercise) {
+                        if (actionToAnnounce.pauseDuration && actionToAnnounce.block && actionToAnnounce.nextExercise) {
                             speakPauseBetweenRepetitions(
-                                queueItem.pauseDuration,
-                                queueItem.blockRepetition,
-                                queueItem.block.repetitions,
-                                queueItem.nextExercise
+                                actionToAnnounce.pauseDuration,
+                                actionToAnnounce.blockRepetition,
+                                actionToAnnounce.block.repetitions,
+                                actionToAnnounce.nextExercise
                             );
                         }
                         break;
                     case "pause-between-blocks":
-                        if (queueItem.pauseDuration && queueItem.block && queueItem.nextExercise) {
-                            speakPauseBetweenBlocks(queueItem.pauseDuration, queueItem.block, queueItem.nextExercise);
+                        if (actionToAnnounce.pauseDuration && actionToAnnounce.block && actionToAnnounce.nextExercise) {
+                            speakPauseBetweenBlocks(actionToAnnounce.pauseDuration, actionToAnnounce.block, actionToAnnounce.nextExercise);
                         }
+                        break;
+                    default:
+                        console.warn("Type d'action non géré:", actionType);
                         break;
                 }
             }, delay);
 
             currentTimeoutId.current = timeoutId;
+            activeTimeouts.current.set(actionKey, timeoutId);
+            console.log("   📌 Timeout enregistré avec ID:", timeoutId, "pour actionKey:", actionKey);
 
             return () => {
-                // Ne pas annuler le timeout si c'est le même élément
-                if (currentTimeoutId.current === timeoutId) {
-                    console.log("Cleanup timeout:", queueKey);
-                    clearTimeout(timeoutId);
-                    currentTimeoutId.current = null;
-                }
+                // Ne PAS annuler le timeout dans le cleanup
+                // Laisser l'annonce se terminer même si l'action change
+                // Le timeout se nettoiera lui-même après exécution
+                console.log("   ℹ️  Cleanup: timeout laissé actif pour permettre l'annonce (actionKey:", actionKey, ")");
             };
         } else {
-            console.log("useEffect annonce - ignoré (clé déjà utilisée):", queueKey);
+            console.log("   ⏭️  Action déjà annoncée, pas de nouvelle annonce");
         }
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [phase, activeWorkout?.blockIndex, activeWorkout?.exerciseIndex, activeWorkout?.blockRepetition, activeWorkout?.isPaused]);
+    }, [
+        currentQueueIndex, // Dépendance principale - quand l'index change, on doit vérifier l'annonce
+        currentAction, // Action courante (utilisé dans le useEffect)
+        queue.length,
+        activeWorkout?.isPaused,
+        activeWorkout,
+        session,
+        speakExerciseInstruction,
+        speakPauseBetweenExercises,
+        speakPauseBetweenRepetitions,
+        speakPauseBetweenBlocks,
+        queue, // Ajout de queue pour s'assurer que les changements sont détectés
+    ]);
 
     // Prononcer l'annonce de fin de séance
     useEffect(() => {
-        if (phase === "completed") {
+        if (currentQueueIndex >= queue.length) {
             // Créer une clé unique pour la fin de séance
             const completedKey = "workout-completed";
 
@@ -592,20 +860,27 @@ export default function WorkoutRunPage() {
                 return () => clearTimeout(timeoutId);
             }
         }
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [phase]);
+    }, [currentQueueIndex, queue.length, speakWorkoutCompleted]);
+
+    // Redirection si pas de workout actif ou session invalide
+    useEffect(() => {
+        if (!activeWorkout || !session) {
+            router.push("/workout");
+        }
+    }, [activeWorkout, session, router]);
+
+    // Redirection si bloc ou exercice invalide
+    useEffect(() => {
+        if (activeWorkout && session && (!currentBlock || !currentExercise)) {
+            router.push("/workout");
+        }
+    }, [activeWorkout, session, currentBlock, currentExercise, router]);
 
     if (!activeWorkout || !session) {
-        router.push("/workout");
         return null;
     }
 
-    const currentBlock = getCurrentBlock();
-    const currentExercise = getCurrentExercise();
-    const nextBlock = getNextBlock();
-
     if (!currentBlock || !currentExercise) {
-        router.push("/workout");
         return null;
     }
 
@@ -633,53 +908,7 @@ export default function WorkoutRunPage() {
             {phase === "between-blocks" && pauseTimer !== null && (
                 <>
                     {/* Liste des blocs de la séance */}
-                    <Card>
-                        <CardHeader>
-                            <CardTitle>Blocs de la séance</CardTitle>
-                        </CardHeader>
-                        <CardContent>
-                            <div className="flex gap-3 overflow-x-auto pb-2">
-                                {session.blocks.map((block, index) => (
-                                    <>
-                                        <div
-                                            key={block.id}
-                                            className={cn(
-                                                "shrink-0 rounded-lg border p-4 min-w-[200px] transition-colors",
-                                                index === activeWorkout.blockIndex && phase !== "between-blocks"
-                                                    ? "border-primary bg-primary/5"
-                                                    : index < activeWorkout.blockIndex
-                                                    ? "border-muted bg-muted/30 opacity-60"
-                                                    : "border-muted bg-background"
-                                            )}
-                                        >
-                                            <p className="font-medium mb-1">{block.name}</p>
-                                            <p className="text-sm text-muted-foreground">
-                                                {block.repetitions} répétition{block.repetitions > 1 ? "s" : ""} • {block.exos.length} exercice
-                                                {block.exos.length > 1 ? "s" : ""}
-                                            </p>
-                                        </div>
-                                        {/* Pause entre blocs (sauf après le dernier) */}
-                                        {index < session.blocks.length - 1 && (
-                                            <div
-                                                key={`pause-block-${block.id}`}
-                                                className={cn(
-                                                    "shrink-0 rounded-lg border p-2 min-w-[70px] transition-colors flex flex-col items-center justify-center gap-1",
-                                                    phase === "between-blocks" && activeWorkout.blockIndex === index + 1
-                                                        ? "border-primary bg-primary/5"
-                                                        : index < activeWorkout.blockIndex
-                                                        ? "border-muted bg-muted/30 opacity-60"
-                                                        : "border-muted bg-background"
-                                                )}
-                                            >
-                                                <Pause className="size-4 text-muted-foreground" />
-                                                <p className="text-xs text-muted-foreground">{block.pauseBeforeNext}s</p>
-                                            </div>
-                                        )}
-                                    </>
-                                ))}
-                            </div>
-                        </CardContent>
-                    </Card>
+                    <BlocksList blocks={session.blocks} currentBlockIndex={currentAction?.blockIndex ?? activeWorkout.blockIndex} phase={phase} />
 
                     <Card className="border-primary">
                         <CardContent className="py-12">
@@ -724,51 +953,7 @@ export default function WorkoutRunPage() {
             {((phase === "exercise" && !activeWorkout.isPaused) || phase === "between-exercises") && (
                 <>
                     {/* Liste des blocs de la séance */}
-                    <Card>
-                        <CardHeader>
-                            <CardTitle>Blocs de la séance</CardTitle>
-                        </CardHeader>
-                        <CardContent>
-                            <div className="flex gap-3 overflow-x-auto pb-2">
-                                {session.blocks.map((block, index) => (
-                                    <>
-                                        <div
-                                            key={block.id}
-                                            className={cn(
-                                                "shrink-0 rounded-lg border p-4 min-w-[200px] transition-colors",
-                                                index === activeWorkout.blockIndex
-                                                    ? "border-primary bg-primary/5"
-                                                    : index < activeWorkout.blockIndex
-                                                    ? "border-muted bg-muted/30 opacity-60"
-                                                    : "border-muted bg-background"
-                                            )}
-                                        >
-                                            <p className="font-medium mb-1">{block.name}</p>
-                                            <p className="text-sm text-muted-foreground">
-                                                {block.repetitions} répétition{block.repetitions > 1 ? "s" : ""} • {block.exos.length} exercice
-                                                {block.exos.length > 1 ? "s" : ""}
-                                            </p>
-                                        </div>
-                                        {/* Pause entre blocs (sauf après le dernier) */}
-                                        {index < session.blocks.length - 1 && (
-                                            <div
-                                                key={`pause-block-${block.id}`}
-                                                className={cn(
-                                                    "shrink-0 rounded-lg border p-2 min-w-[70px] transition-colors flex flex-col items-center justify-center gap-1",
-                                                    index < activeWorkout.blockIndex
-                                                        ? "border-muted bg-muted/30 opacity-60"
-                                                        : "border-muted bg-background"
-                                                )}
-                                            >
-                                                <Pause className="size-4 text-muted-foreground" />
-                                                <p className="text-xs text-muted-foreground">{block.pauseBeforeNext}s</p>
-                                            </div>
-                                        )}
-                                    </>
-                                ))}
-                            </div>
-                        </CardContent>
-                    </Card>
+                    <BlocksList blocks={session.blocks} currentBlockIndex={currentAction?.blockIndex ?? activeWorkout.blockIndex} phase={phase} />
 
                     {/* Bloc en cours */}
                     <Card>
@@ -880,6 +1065,18 @@ export default function WorkoutRunPage() {
                                                             {currentExercise.member ? `répétitions par ${currentExercise.member}` : "répétitions"}
                                                         </span>
                                                     </div>
+                                                    {/* Afficher le timer automatique si actif */}
+                                                    {repsTimer !== null && (
+                                                        <div className="text-center mt-2">
+                                                            <p className="text-sm text-muted-foreground">
+                                                                Passage automatique dans :{" "}
+                                                                <span className="font-semibold text-primary">{formatTime(repsTimer)}</span>
+                                                            </p>
+                                                            <p className="text-xs text-muted-foreground mt-1">
+                                                                (Appuyez sur Espace pour terminer maintenant)
+                                                            </p>
+                                                        </div>
+                                                    )}
                                                     <Button onClick={handleCompleteExercise} className="mt-4" size="lg">
                                                         <Check className="size-4 mr-2" />
                                                         Terminer l&apos;exercice
@@ -908,9 +1105,8 @@ export default function WorkoutRunPage() {
                         <CardContent>
                             <div className="flex gap-3 overflow-x-auto pb-2">
                                 {currentBlock.exos.map((exo, index) => (
-                                    <>
+                                    <div key={exo.id} className="flex gap-3">
                                         <div
-                                            key={exo.id}
                                             className={cn(
                                                 "shrink-0 rounded-lg border p-4 min-w-[180px] transition-colors",
                                                 index === activeWorkout.exerciseIndex && phase === "exercise"
@@ -930,7 +1126,6 @@ export default function WorkoutRunPage() {
                                         {/* Pause entre exercices (sauf après le dernier) */}
                                         {index < currentBlock.exos.length - 1 && (
                                             <div
-                                                key={`pause-${exo.id}`}
                                                 className={cn(
                                                     "shrink-0 rounded-lg border p-2 min-w-[70px] transition-colors flex flex-col items-center justify-center gap-1",
                                                     phase === "between-exercises" && activeWorkout.exerciseIndex === index + 1
@@ -944,7 +1139,7 @@ export default function WorkoutRunPage() {
                                                 <p className="text-xs text-muted-foreground">{currentBlock.betweenExos}s</p>
                                             </div>
                                         )}
-                                    </>
+                                    </div>
                                 ))}
                                 {/* Pause entre répétitions (après le dernier exercice, sauf si dernière répétition) */}
                                 {activeWorkout.blockRepetition < currentBlock.repetitions && (
